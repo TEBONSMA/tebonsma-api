@@ -1,2 +1,2 @@
-# Deployed to Linux (bbot), so keep LF line endings even on Windows checkouts
+# Runs on Linux, so keep LF line endings even on Windows checkouts
 * text=auto eol=lf
