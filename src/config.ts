@@ -11,6 +11,7 @@ export const config = {
     .map(origin => origin.trim())
     .filter(Boolean),
   userinfoUrl: process.env.OIDC_USERINFO_URL ?? 'https://auth.tebonsma.no/api/oidc/userinfo',
+  dataDir: process.env.DATA_DIR ?? './data',
   lldap: {
     url: (process.env.LLDAP_URL ?? 'http://lldap:17170').replace(/\/$/, ''),
     username: required('LLDAP_USERNAME'),

@@ -8,6 +8,11 @@ RUN npm ci --omit=dev
 
 COPY src ./src
 
+# SQLite database lives here; mount a volume so it survives rebuilds
+ENV DATA_DIR=/app/data
+RUN mkdir -p /app/data && chown node:node /app/data
+VOLUME /app/data
+
 USER node
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \

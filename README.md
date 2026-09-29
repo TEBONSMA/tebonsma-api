@@ -1,7 +1,7 @@
 # tebonsma-api
 
-Small HTTP API that lets members logged in on tebonsma.no view and edit their own account
-in LLDAP. The site's `/konto` page uses it.
+Small HTTP API for members logged in on tebonsma.no. It lets them view and edit their own
+account in LLDAP (the site's `/konto` page) and keeps the scoreboard for the Flappy game.
 
 ## How it works
 
@@ -22,6 +22,18 @@ in LLDAP. The site's `/konto` page uses it.
 | PATCH | `/me` | Update `displayName`, `firstName`, `lastName` |
 | PUT | `/me/avatar` | Set profile picture, body `{ "image": "<base64 JPEG>" }`, max 512 KB |
 | DELETE | `/me/avatar` | Remove profile picture |
+| POST | `/flappy/runs` | Start a game run, returns `{ "runId": "…" }` |
+| POST | `/flappy/scores` | Submit a finished run, body `{ "runId": "…", "score": 12 }` |
+| GET | `/flappy/leaderboard` | Top 5, plus the caller's own best and rank |
+
+### Flappy scoreboard
+
+Each member has one entry: their best score and the date they set it. The site fetches a
+run ticket when a game starts and submits the score with it when the game ends. A ticket
+can be used once, only by the member it was issued to, and the score has to be possible in
+the time since the ticket was issued. The game gives at most one point per 100 steps at
+60 steps per second. This stops casual cheating, not a determined player. Scores live in a
+SQLite database in `DATA_DIR`.
 
 ## Requirements
 
@@ -41,6 +53,7 @@ in LLDAP. The site's `/konto` page uses it.
 | `OIDC_USERINFO_URL` | `https://auth.tebonsma.no/api/oidc/userinfo` | Where tokens are checked |
 | `ALLOWED_ORIGINS` | `https://tebonsma.no` | Comma-separated sites allowed to call the API (CORS) |
 | `PORT` | `8080` | Port to listen on |
+| `DATA_DIR` | `./data` (`/app/data` in Docker) | Folder for the SQLite database |
 
 Put the credentials in `.env` (see `.env.example`). It is git-ignored and should never be
 committed.
@@ -61,8 +74,11 @@ committed.
 The container doesn't publish a port. Put it behind a reverse proxy or tunnel that serves
 it over HTTPS. The image has a healthcheck on `/health`.
 
+The scoreboard database is kept in the `data` volume, so it survives rebuilds. To back it
+up, copy `tebonsma.db` out of that volume.
+
 To update, get the new code in place and run `docker compose up -d --build` again. `.env`
-is left untouched.
+and the data volume are left untouched.
 
 ## Running locally
 

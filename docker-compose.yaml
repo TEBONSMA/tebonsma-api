@@ -9,9 +9,14 @@ services:
       LLDAP_URL: http://lldap:17170
       OIDC_USERINFO_URL: https://auth.tebonsma.no/api/oidc/userinfo
       ALLOWED_ORIGINS: https://tebonsma.no,http://localhost:5173
+    volumes:
+      - data:/app/data
     # Same network as lldap and the konto-tebonsma tunnel, which routes api.tebonsma.no here
     networks:
       - lldap_default
+
+volumes:
+  data:
 
 networks:
   lldap_default:

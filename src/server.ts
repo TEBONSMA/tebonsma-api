@@ -6,6 +6,7 @@ import { createMiddleware } from 'hono/factory'
 import { HTTPException } from 'hono/http-exception'
 import { verifyAccessToken, type Caller } from './authelia.ts'
 import { config } from './config.ts'
+import { getLeaderboard, ScoreRejected, startRun, submitScore } from './flappy.ts'
 import { getProfile, setAvatar, updateProfile, type ProfileChanges } from './lldap.ts'
 
 type Env = { Variables: { caller: Caller } }
@@ -26,7 +27,7 @@ app.use(
   cors({
     origin: config.allowedOrigins,
     allowHeaders: ['Authorization', 'Content-Type'],
-    allowMethods: ['GET', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
+    allowMethods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
     maxAge: 600,
   }),
 )
@@ -86,8 +87,28 @@ app.delete('/me/avatar', requireCaller, async c => {
   return c.json(await getProfile(username))
 })
 
+// Flappy scoreboard: a run ticket is issued when a game starts and redeemed with the score
+app.post('/flappy/runs', requireCaller, c => c.json({ runId: startRun(c.get('caller').username) }))
+
+app.post('/flappy/scores', requireCaller, async c => {
+  const body = (await c.req.json().catch(() => null)) as { runId?: unknown; score?: unknown } | null
+  const runId = body?.runId
+  const score = body?.score
+  if (typeof runId !== 'string' || typeof score !== 'number' || !Number.isInteger(score) || score < 0 || score > 100_000) {
+    throw new HTTPException(400, { message: 'Ugyldig resultat' })
+  }
+
+  const { username } = c.get('caller')
+  const profile = await getProfile(username)
+  const newBest = submitScore(username, profile.displayName || username, runId, score)
+  return c.json({ newBest, leaderboard: getLeaderboard(username) })
+})
+
+app.get('/flappy/leaderboard', requireCaller, c => c.json(getLeaderboard(c.get('caller').username)))
+
 app.onError((err, c) => {
   if (err instanceof HTTPException) return c.json({ error: err.message }, err.status)
+  if (err instanceof ScoreRejected) return c.json({ error: err.message }, 422)
   console.error(`${c.req.method} ${c.req.path} failed:`, err)
   return c.json({ error: 'Noe gikk galt på serveren' }, 500)
 })
