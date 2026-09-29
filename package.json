@@ -1,0 +1,23 @@
+{
+  "name": "tebonsma-api",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Account API for tebonsma.no: lets logged-in members edit their own LLDAP profile",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "start": "node src/server.ts",
+    "dev": "node --watch src/server.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.19.0",
+    "hono": "^4.10.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.18.0",
+    "typescript": "~6.0.3"
+  }
+}

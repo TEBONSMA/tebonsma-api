@@ -1,0 +1,18 @@
+services:
+  tebonsma-api:
+    build: .
+    container_name: tebonsma-api
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      PORT: "8080"
+      LLDAP_URL: http://lldap:17170
+      OIDC_USERINFO_URL: https://auth.tebonsma.no/api/oidc/userinfo
+      ALLOWED_ORIGINS: https://tebonsma.no,http://localhost:5173
+    # Same network as lldap and the konto-tebonsma tunnel, which routes api.tebonsma.no here
+    networks:
+      - lldap_default
+
+networks:
+  lldap_default:
+    external: true
