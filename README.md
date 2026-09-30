@@ -1,7 +1,7 @@
 # tebonsma-api
 
 Small HTTP API for members logged in on tebonsma.no. It lets them view and edit their own
-account in LLDAP (the site's `/konto` page) and keeps the scoreboard for the Flappy game.
+account in LLDAP (the site's `/konto` page) and keeps the scoreboards for the site's games.
 
 ## How it works
 
@@ -22,18 +22,29 @@ account in LLDAP (the site's `/konto` page) and keeps the scoreboard for the Fla
 | PATCH | `/me` | Update `displayName`, `firstName`, `lastName` |
 | PUT | `/me/avatar` | Set profile picture, body `{ "image": "<base64 JPEG>" }`, max 512 KB |
 | DELETE | `/me/avatar` | Remove profile picture |
-| POST | `/flappy/runs` | Start a game run, returns `{ "runId": "…" }` |
-| POST | `/flappy/scores` | Submit a finished run, body `{ "runId": "…", "score": 12 }` |
-| GET | `/flappy/leaderboard` | Top 5, plus the caller's own best and rank |
+| POST | `/games/:game/runs` | Start a game run, returns `{ "runId": "…" }` |
+| POST | `/games/:game/scores` | Submit a finished run, body `{ "runId": "…", "score": 12 }` |
+| GET | `/games/:game/leaderboard` | Top 5, plus the caller's own best and rank |
 
-### Flappy scoreboard
+`:game` is the game's slug on the site: `flappy-teb`, `snake-teb` or `2048-teb`. The older
+`/flappy/runs`, `/flappy/scores` and `/flappy/leaderboard` still work and mean `flappy-teb`.
 
-Each member has one entry: their best score and the date they set it. The site fetches a
-run ticket when a game starts and submits the score with it when the game ends. A ticket
-can be used once, only by the member it was issued to, and the score has to be possible in
-the time since the ticket was issued. The game gives at most one point per 100 steps at
-60 steps per second. This stops casual cheating, not a determined player. Scores live in a
-SQLite database in `DATA_DIR`.
+### Game scoreboards
+
+Each game has its own scoreboard, and each member has one entry per game: their best score
+and the date they set it. The site fetches a run ticket when a game starts and submits the
+score with it when the game ends. A ticket can be used once, only by the member and for the
+game it was issued to, and the score has to be possible in the time since the ticket was
+issued:
+
+| Game | Most points possible |
+|---|---|
+| `flappy-teb` | 0.6 per second (a pipe at most every 100 steps at 60 steps per second) |
+| `snake-teb` | 7.5 per second (a move at most every 8 frames, one bottle per move) |
+| `2048-teb` | what 15 moves per second could earn by merging the tiles they add |
+
+This stops casual cheating, not a determined player. To add a game, give it an entry in
+`GAMES` in `src/scoreboard.ts`. Scores live in a SQLite database in `DATA_DIR`.
 
 ## Requirements
 

@@ -1,13 +1,13 @@
 import { serve } from '@hono/node-server'
-import { Hono } from 'hono'
+import { Hono, type Context } from 'hono'
 import { bodyLimit } from 'hono/body-limit'
 import { cors } from 'hono/cors'
 import { createMiddleware } from 'hono/factory'
 import { HTTPException } from 'hono/http-exception'
 import { verifyAccessToken, type Caller } from './authelia.ts'
 import { config } from './config.ts'
-import { getLeaderboard, ScoreRejected, startRun, submitScore } from './flappy.ts'
 import { getProfile, setAvatar, updateProfile, type ProfileChanges } from './lldap.ts'
+import { getLeaderboard, isGame, ScoreRejected, startRun, submitScore } from './scoreboard.ts'
 
 type Env = { Variables: { caller: Caller } }
 
@@ -87,24 +87,42 @@ app.delete('/me/avatar', requireCaller, async c => {
   return c.json(await getProfile(username))
 })
 
-// Flappy scoreboard: a run ticket is issued when a game starts and redeemed with the score
-app.post('/flappy/runs', requireCaller, c => c.json({ runId: startRun(c.get('caller').username) }))
+// Game scoreboards: a run ticket is issued when a game starts and redeemed with the score
+const MAX_SCORE = 10_000_000
 
-app.post('/flappy/scores', requireCaller, async c => {
+const gameParam = (c: Context<Env>) => {
+  const game = c.req.param('game') ?? ''
+  if (!isGame(game)) throw new HTTPException(404, { message: 'Ukjent spill' })
+  return game
+}
+
+const startGameRun = (c: Context<Env>, game: string) => c.json({ runId: startRun(game, c.get('caller').username) })
+
+const submitGameScore = async (c: Context<Env>, game: string) => {
   const body = (await c.req.json().catch(() => null)) as { runId?: unknown; score?: unknown } | null
   const runId = body?.runId
   const score = body?.score
-  if (typeof runId !== 'string' || typeof score !== 'number' || !Number.isInteger(score) || score < 0 || score > 100_000) {
+  if (typeof runId !== 'string' || typeof score !== 'number' || !Number.isInteger(score) || score < 0 || score > MAX_SCORE) {
     throw new HTTPException(400, { message: 'Ugyldig resultat' })
   }
 
   const { username } = c.get('caller')
   const profile = await getProfile(username)
-  const newBest = submitScore(username, profile.displayName || username, runId, score)
-  return c.json({ newBest, leaderboard: getLeaderboard(username) })
-})
+  const newBest = submitScore(game, username, profile.displayName || username, runId, score)
+  return c.json({ newBest, leaderboard: getLeaderboard(game, username) })
+}
 
-app.get('/flappy/leaderboard', requireCaller, c => c.json(getLeaderboard(c.get('caller').username)))
+const gameLeaderboard = (c: Context<Env>, game: string) => c.json(getLeaderboard(game, c.get('caller').username))
+
+app.post('/games/:game/runs', requireCaller, c => startGameRun(c, gameParam(c)))
+app.post('/games/:game/scores', requireCaller, c => submitGameScore(c, gameParam(c)))
+app.get('/games/:game/leaderboard', requireCaller, c => gameLeaderboard(c, gameParam(c)))
+
+// The site used these before every game had a scoreboard; kept so an older copy of the
+// site in someone's browser keeps working
+app.post('/flappy/runs', requireCaller, c => startGameRun(c, 'flappy-teb'))
+app.post('/flappy/scores', requireCaller, c => submitGameScore(c, 'flappy-teb'))
+app.get('/flappy/leaderboard', requireCaller, c => gameLeaderboard(c, 'flappy-teb'))
 
 app.onError((err, c) => {
   if (err instanceof HTTPException) return c.json({ error: err.message }, err.status)
