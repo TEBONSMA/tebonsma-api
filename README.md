@@ -105,6 +105,41 @@ npm run dev
 
 `npm run typecheck` checks types without running anything.
 
+### Without Authelia and LLDAP (mock auth)
+
+```bash
+npm run dev:mock
+```
+
+This starts the API on port 8787 together with a mock server on `http://localhost:9091`
+that stands in for both Authelia and LLDAP, so no credentials or environment variables are
+needed. The API code in `src/` runs unchanged; it is only pointed at the mock. The port is
+not 8080 because other local software often uses that, and the browser may then reach it
+instead of the API. Set `PORT` to use another one, and `VITE_API_URL` in the site to match.
+
+The mock's login page has no passwords. You pick who to log in as:
+
+| User | Groups | For testing |
+|---|---|---|
+| `dev` | `tebonsma` | An ordinary member |
+| `admin` | `tebonsma`, `lldap_admin` | What admins see |
+
+Profile edits and Flappy scores are reset when the server restarts, which also happens
+when you save a file. Scores are kept in `./data/mock` while it runs; set `DATA_DIR` to
+keep them between restarts. Add or change users in `dev/mock-auth.ts`.
+
+To use it from the site, run `npm run dev:mock` in the Tebonsma.no repo's `teb-app` folder
+as well. To call the API directly, the access token is `mock-access.<username>`:
+
+```bash
+curl -H "Authorization: Bearer mock-access.dev" http://localhost:8787/me
+```
+
+The mock lives in `dev/`, which is not copied into the Docker image. It only listens on
+127.0.0.1 and refuses to start when `NODE_ENV` is `production`. Its user directory only
+answers the GraphQL operations the API uses today (`User` and `Update`); a new one returns
+an error until it is added to `dev/mock-auth.ts`.
+
 ## Security
 
 - The service account is an LLDAP admin, so keep `.env` private. The API only exposes the

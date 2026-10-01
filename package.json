@@ -10,6 +10,7 @@
   "scripts": {
     "start": "node src/server.ts",
     "dev": "node --watch src/server.ts",
+    "dev:mock": "node --watch dev/server.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
