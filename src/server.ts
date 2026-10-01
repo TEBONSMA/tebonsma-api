@@ -5,6 +5,7 @@ import { cors } from 'hono/cors'
 import { HTTPException } from 'hono/http-exception'
 import { requireCaller, type Env } from './auth.ts'
 import { config } from './config.ts'
+import { eventRoutes } from './eventRoutes.ts'
 import { feedRoutes } from './feedRoutes.ts'
 import { getProfile as readProfile, setAvatar, updateProfile, type ProfileChanges } from './lldap.ts'
 import { rememberProfile } from './members.ts'
@@ -123,6 +124,7 @@ app.post('/flappy/scores', requireCaller, c => submitGameScore(c, 'flappy-teb'))
 app.get('/flappy/leaderboard', requireCaller, c => gameLeaderboard(c, 'flappy-teb'))
 
 app.route('/', feedRoutes)
+app.route('/', eventRoutes)
 
 app.onError((err, c) => {
   if (err instanceof HTTPException) return c.json({ error: err.message }, err.status)

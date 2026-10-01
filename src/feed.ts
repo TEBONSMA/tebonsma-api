@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { HTTPException } from 'hono/http-exception'
 import { db, transaction } from './db.ts'
+import { eventOf, isEvent, saveEvent, type EventInput } from './events.ts'
 import { getMembers, type PublicMember } from './members.ts'
 
 // Who is looking. Visitors who aren't logged in are null and only see public posts.
@@ -20,6 +21,7 @@ export const SORTS = {
 export type Sort = keyof typeof SORTS
 
 export const MAX_ATTACHMENTS = 10
+export const MAX_COMMENT_ATTACHMENTS = 4
 export const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
 // Uploads that never ended up in a post are removed after this long
 const UNATTACHED_TTL_MS = 24 * 60 * 60 * 1000
@@ -114,7 +116,36 @@ db.exec(`
     read_at    TEXT
   );
   CREATE INDEX IF NOT EXISTS notifications_recipient ON notifications (recipient, created_at DESC);
+
+  -- Notifications for every member at once: a new event, or a message from its organizer.
+  -- Kept as one row, with a note of who has read it, so the API needn't know every member.
+  CREATE TABLE IF NOT EXISTS announcements (
+    id         TEXT PRIMARY KEY,
+    kind       TEXT NOT NULL CHECK (kind IN ('event', 'announcement')),
+    actor      TEXT NOT NULL,
+    post_id    TEXT NOT NULL REFERENCES feed_posts (id) ON DELETE CASCADE,
+    body       TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS announcements_created ON announcements (created_at DESC);
+
+  CREATE TABLE IF NOT EXISTS announcement_reads (
+    announcement_id TEXT NOT NULL REFERENCES announcements (id) ON DELETE CASCADE,
+    username        TEXT NOT NULL,
+    PRIMARY KEY (announcement_id, username)
+  );
 `)
+
+// Files on a comment came after the first databases were made. They have comment_id set
+// and no post_id; the post they belong to is the comment's.
+const attachmentColumns = db.prepare('PRAGMA table_info(feed_attachments)').all() as { name: string }[]
+if (!attachmentColumns.some(column => column.name === 'comment_id')) {
+  db.exec('ALTER TABLE feed_attachments ADD COLUMN comment_id TEXT REFERENCES feed_comments (id) ON DELETE CASCADE')
+}
+db.exec('CREATE INDEX IF NOT EXISTS feed_attachments_comment ON feed_attachments (comment_id)')
+
+// An upload that is neither in a post nor on a comment yet
+const UNATTACHED = 'post_id IS NULL AND comment_id IS NULL'
 
 const now = () => new Date().toISOString()
 const notFound = () => new HTTPException(404, { message: 'Innlegget finnes ikke' })
@@ -178,6 +209,15 @@ function pollOf(postId: string, viewer: Viewer | null) {
   }
 }
 
+const toAttachment = (a: AttachmentRow) => ({
+  id: a.id,
+  name: a.name,
+  mime: a.mime,
+  size: a.size,
+  isImage: a.is_image === 1,
+  url: `/feed/attachments/${a.id}`,
+})
+
 async function toPosts(rows: PostRow[], viewer: Viewer | null) {
   const members = await getMembers(rows.map(row => row.author))
   const has = (table: string, column: string, postId: string) =>
@@ -195,15 +235,9 @@ async function toPosts(rows: PostRow[], viewer: Viewer | null) {
       createdAt: row.created_at,
       editedAt: row.edited_at,
       pinned: row.pinned_at !== null,
-      attachments: attachments.map(a => ({
-        id: a.id,
-        name: a.name,
-        mime: a.mime,
-        size: a.size,
-        isImage: a.is_image === 1,
-        url: `/feed/attachments/${a.id}`,
-      })),
+      attachments: attachments.map(toAttachment),
       poll: pollOf(row.id, viewer),
+      event: eventOf(row.id, viewer, row.visibility),
       likeCount: row.like_count,
       liked: has('feed_post_likes', 'username', row.id),
       commentCount: row.comment_count,
@@ -233,10 +267,28 @@ export async function listPosts(viewer: Viewer | null, sort: Sort, offset: numbe
   return { posts: await toPosts(rows.slice(0, limit), viewer), nextOffset: hasMore ? offset + limit : null }
 }
 
+const MAX_EVENTS_LISTED = 200
+
+// Events in the order they take place, the ones without a date last. With a period, only
+// the events that overlap it.
+export async function listEvents(viewer: Viewer | null, from: string | null, to: string | null) {
+  const rows = db
+    .prepare(
+      `${POST_SELECT} JOIN events e ON e.post_id = p.id
+       WHERE (? = 1 OR p.visibility = 'public')
+         AND (? IS NULL OR e.ends_at >= ?) AND (? IS NULL OR e.starts_at <= ?)
+       ORDER BY e.starts_at IS NULL, e.starts_at LIMIT ?`,
+    )
+    .all(viewer ? 1 : 0, from, from, to, to, MAX_EVENTS_LISTED) as unknown as PostRow[]
+  return toPosts(rows, viewer)
+}
+
 export interface PostInput {
   body: string
   visibility: Visibility
   attachmentIds: string[]
+  // Makes the post an event
+  event: EventInput | null
 }
 
 // Puts the listed uploads on the post in the given order and drops the ones left out.
@@ -244,7 +296,9 @@ export interface PostInput {
 function setAttachments(postId: string, owner: string, ids: string[]) {
   ids.forEach((id, position) => {
     const { changes } = db
-      .prepare('UPDATE feed_attachments SET post_id = ?, position = ? WHERE id = ? AND owner = ? AND (post_id IS NULL OR post_id = ?)')
+      .prepare(
+        'UPDATE feed_attachments SET post_id = ?, position = ? WHERE id = ? AND owner = ? AND comment_id IS NULL AND (post_id IS NULL OR post_id = ?)',
+      )
       .run(postId, position, id, owner, postId)
     if (changes === 0) throw new HTTPException(400, { message: 'Et vedlegg finnes ikke lenger. Last det opp på nytt.' })
   })
@@ -266,6 +320,10 @@ export function createPost(viewer: Viewer, input: PostInput, pollOptions: string
     pollOptions.forEach((text, position) => {
       db.prepare('INSERT INTO feed_poll_options (id, post_id, position, text) VALUES (?, ?, ?, ?)').run(randomUUID(), id, position, text)
     })
+    if (input.event) {
+      saveEvent(id, input.event)
+      announce('event', viewer.username, id, input.event.title)
+    }
   })
   return getPost(viewer, id)
 }
@@ -273,10 +331,13 @@ export function createPost(viewer: Viewer, input: PostInput, pollOptions: string
 export function updatePost(viewer: Viewer, id: string, input: PostInput) {
   const post = findPost(viewer, id)
   if (post.author !== viewer.username) throw new HTTPException(403, { message: 'Du kan bare redigere egne innlegg' })
+  // An event stays an event, and a post a post
+  if (isEvent(id) !== (input.event !== null)) throw new HTTPException(400, { message: 'Ugyldig forespørsel' })
 
   transaction(() => {
     db.prepare('UPDATE feed_posts SET body = ?, visibility = ?, edited_at = ? WHERE id = ?').run(input.body, input.visibility, now(), id)
     setAttachments(id, post.author, input.attachmentIds)
+    if (input.event) saveEvent(id, input.event)
   })
   return getPost(viewer, id)
 }
@@ -396,12 +457,16 @@ async function toComments(rows: CommentRow[], viewer: Viewer | null) {
   const members = await getMembers(rows.filter(row => !row.deleted_at).map(row => row.author))
   return rows.map(row => {
     const deleted = row.deleted_at !== null
+    const attachments = db
+      .prepare('SELECT id, name, mime, size, is_image FROM feed_attachments WHERE comment_id = ? ORDER BY position')
+      .all(row.id) as unknown as AttachmentRow[]
     return {
       id: row.id,
       parentId: row.parent_id,
       // Nothing about a deleted comment is sent, not even who wrote it
       author: deleted ? null : members.get(row.author)!,
       body: row.body,
+      attachments: attachments.map(toAttachment),
       createdAt: row.created_at,
       deleted,
       likeCount: row.like_count,
@@ -427,7 +492,7 @@ function findComment(viewer: Viewer, id: string) {
   return row
 }
 
-export async function addComment(viewer: Viewer, postId: string, body: string, parentId: string | null) {
+export async function addComment(viewer: Viewer, postId: string, body: string, parentId: string | null, attachmentIds: string[]) {
   const post = findPost(viewer, postId)
   let parent: CommentRow | null = null
   if (parentId) {
@@ -446,6 +511,12 @@ export async function addComment(viewer: Viewer, postId: string, body: string, p
       body,
       now(),
     )
+    attachmentIds.forEach((attachmentId, position) => {
+      const { changes } = db
+        .prepare(`UPDATE feed_attachments SET comment_id = ?, position = ? WHERE id = ? AND owner = ? AND ${UNATTACHED}`)
+        .run(id, position, attachmentId, viewer.username)
+      if (changes === 0) throw new HTTPException(400, { message: 'Et vedlegg finnes ikke lenger. Last det opp på nytt.' })
+    })
 
     // The post's author hears about every comment, and whoever is answered about the reply
     const recipients = new Map([[post.author, 'comment']])
@@ -480,6 +551,7 @@ export function deleteComment(viewer: Viewer, id: string) {
     if (replies(id) > 0) {
       db.prepare("UPDATE feed_comments SET body = '', deleted_at = ? WHERE id = ?").run(now(), id)
       db.prepare('DELETE FROM feed_comment_likes WHERE comment_id = ?').run(id)
+      db.prepare('DELETE FROM feed_attachments WHERE comment_id = ?').run(id)
       db.prepare('DELETE FROM notifications WHERE comment_id = ?').run(id)
       return
     }
@@ -526,10 +598,10 @@ const cleanFileName = (name: string) =>
     .slice(-120) || 'fil'
 
 export function saveAttachment(viewer: Viewer, file: { name: string; type: string; bytes: Uint8Array }) {
-  db.prepare('DELETE FROM feed_attachments WHERE post_id IS NULL AND created_at < ?').run(
+  db.prepare(`DELETE FROM feed_attachments WHERE ${UNATTACHED} AND created_at < ?`).run(
     new Date(Date.now() - UNATTACHED_TTL_MS).toISOString(),
   )
-  const { n } = db.prepare('SELECT COUNT(*) AS n FROM feed_attachments WHERE post_id IS NULL AND owner = ?').get(viewer.username) as {
+  const { n } = db.prepare(`SELECT COUNT(*) AS n FROM feed_attachments WHERE ${UNATTACHED} AND owner = ?`).get(viewer.username) as {
     n: number
   }
   if (n >= MAX_UNATTACHED_PER_MEMBER) {
@@ -549,12 +621,15 @@ export function readAttachment(viewer: Viewer | null, id: string) {
   const row = db
     .prepare(
       `SELECT a.name, a.mime, a.is_image, a.data, a.owner, p.visibility
-       FROM feed_attachments a LEFT JOIN feed_posts p ON p.id = a.post_id WHERE a.id = ?`,
+       FROM feed_attachments a
+         LEFT JOIN feed_comments c ON c.id = a.comment_id
+         LEFT JOIN feed_posts p ON p.id = COALESCE(a.post_id, c.post_id)
+       WHERE a.id = ?`,
     )
     .get(id) as
     | { name: string; mime: string; is_image: number; data: Uint8Array; owner: string; visibility: Visibility | null }
     | undefined
-  // Until the post is saved, only the member who uploaded the file can fetch it
+  // Until the post or comment is saved, only the member who uploaded the file can fetch it
   if (!row || (row.visibility === null && row.owner !== viewer?.username)) {
     throw new HTTPException(404, { message: 'Vedlegget finnes ikke' })
   }
@@ -564,50 +639,99 @@ export function readAttachment(viewer: Viewer | null, id: string) {
 
 // --- Notifications ---
 
+type AnnouncementKind = 'event' | 'announcement'
+
+// Runs inside the transaction of whatever is being announced
+function announce(kind: AnnouncementKind, actor: string, postId: string, body: string) {
+  db.prepare('INSERT INTO announcements (id, kind, actor, post_id, body, created_at) VALUES (?, ?, ?, ?, ?, ?)').run(
+    randomUUID(),
+    kind,
+    actor,
+    postId,
+    body,
+    now(),
+  )
+}
+
+// A message from the organizer of an event to every member
+export function sendAnnouncement(viewer: Viewer, id: string, body: string) {
+  const post = findPost(viewer, id)
+  if (!isEvent(id)) throw new HTTPException(404, { message: 'Arrangementet finnes ikke' })
+  if (post.author !== viewer.username) throw new HTTPException(403, { message: 'Bare den som opprettet arrangementet kan sende kunngjøringer' })
+  announce('announcement', viewer.username, id, body)
+}
+
+interface NotificationRow {
+  id: string
+  kind: 'comment' | 'reply' | AnnouncementKind
+  actor: string
+  post_id: string
+  comment_id: string | null
+  created_at: string
+  read: number
+  body: string
+}
+
+// Announcements go to everyone but the member who made them
+const ANNOUNCEMENTS_FOR = `
+  FROM announcements a
+  LEFT JOIN announcement_reads r ON r.announcement_id = a.id AND r.username = ?
+  WHERE a.actor != ?
+`
+
 export async function listNotifications(viewer: Viewer) {
-  const rows = db
+  const { username } = viewer
+  const own = db
     .prepare(
-      `SELECT n.id, n.kind, n.actor, n.post_id, n.comment_id, n.created_at, n.read_at, c.body
+      `SELECT n.id, n.kind, n.actor, n.post_id, n.comment_id, n.created_at, n.read_at IS NOT NULL AS read, c.body
        FROM notifications n JOIN feed_comments c ON c.id = n.comment_id
        WHERE n.recipient = ? ORDER BY n.created_at DESC LIMIT ?`,
     )
-    .all(viewer.username, NOTIFICATIONS_SHOWN) as {
-    id: string
-    kind: 'comment' | 'reply'
-    actor: string
-    post_id: string
-    comment_id: string
-    created_at: string
-    read_at: string | null
-    body: string
-  }[]
-  const { n } = db.prepare('SELECT COUNT(*) AS n FROM notifications WHERE recipient = ? AND read_at IS NULL').get(viewer.username) as {
-    n: number
-  }
+    .all(username, NOTIFICATIONS_SHOWN) as unknown as NotificationRow[]
+  const announced = db
+    .prepare(
+      `SELECT a.id, a.kind, a.actor, a.post_id, NULL AS comment_id, a.created_at, r.username IS NOT NULL AS read, a.body
+       ${ANNOUNCEMENTS_FOR} ORDER BY a.created_at DESC LIMIT ?`,
+    )
+    .all(username, username, NOTIFICATIONS_SHOWN) as unknown as NotificationRow[]
+  const rows = [...own, ...announced].sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, NOTIFICATIONS_SHOWN)
+
+  const count = (sql: string, ...params: string[]) => (db.prepare(sql).get(...params) as { n: number }).n
+  const unread =
+    count('SELECT COUNT(*) AS n FROM notifications WHERE recipient = ? AND read_at IS NULL', username) +
+    count(`SELECT COUNT(*) AS n ${ANNOUNCEMENTS_FOR} AND r.username IS NULL`, username, username)
   const members = await getMembers(rows.map(row => row.actor))
 
   return {
-    unread: n,
-    items: rows.map(row => ({
-      id: row.id,
-      kind: row.kind,
-      actor: members.get(row.actor)!,
-      postId: row.post_id,
-      commentId: row.comment_id,
-      excerpt: row.body.length > EXCERPT_LENGTH ? `${row.body.slice(0, EXCERPT_LENGTH)}…` : row.body,
-      createdAt: row.created_at,
-      read: row.read_at !== null,
-    })),
+    unread,
+    items: rows.map(row => {
+      // A comment can be pictures only
+      const text = row.body || 'Bilde'
+      return {
+        id: row.id,
+        kind: row.kind,
+        actor: members.get(row.actor)!,
+        postId: row.post_id,
+        commentId: row.comment_id,
+        excerpt: text.length > EXCERPT_LENGTH ? `${text.slice(0, EXCERPT_LENGTH)}…` : text,
+        createdAt: row.created_at,
+        read: row.read === 1,
+      }
+    }),
   }
 }
 
 // Without ids, everything is marked as read
 export function markNotificationsRead(viewer: Viewer, ids: string[] | null) {
+  const { username } = viewer
+  const readAnnouncements = 'INSERT OR IGNORE INTO announcement_reads (announcement_id, username) SELECT id, ? FROM announcements'
   if (ids === null) {
-    db.prepare('UPDATE notifications SET read_at = ? WHERE recipient = ? AND read_at IS NULL').run(now(), viewer.username)
+    db.prepare('UPDATE notifications SET read_at = ? WHERE recipient = ? AND read_at IS NULL').run(now(), username)
+    db.prepare(`${readAnnouncements} WHERE actor != ?`).run(username, username)
     return
   }
   for (const id of ids) {
-    db.prepare('UPDATE notifications SET read_at = ? WHERE id = ? AND recipient = ? AND read_at IS NULL').run(now(), id, viewer.username)
+    db.prepare('UPDATE notifications SET read_at = ? WHERE id = ? AND recipient = ? AND read_at IS NULL').run(now(), id, username)
+    db.prepare(`${readAnnouncements} WHERE id = ?`).run(username, id)
   }
 }

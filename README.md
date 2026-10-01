@@ -40,8 +40,8 @@ a login and then return only public posts; everything else needs a member's toke
 |---|---|---|
 | GET | `/feed/posts?sort=&offset=&limit=` | A page of posts, pinned ones first. `sort` is `new`, `old`, `likes` or `comments` |
 | GET | `/feed/posts/:id` | One post |
-| POST | `/feed/posts` | Write a post: `{ body, visibility, attachmentIds, pollOptions }` |
-| PATCH | `/feed/posts/:id` | Edit own post: `{ body, visibility, attachmentIds }` |
+| POST | `/feed/posts` | Write a post: `{ body, visibility, attachmentIds, pollOptions }`. With `event: { title, location, startsAt, endsAt }` the post is an event, and every member is notified |
+| PATCH | `/feed/posts/:id` | Edit own post: `{ body, visibility, attachmentIds }`, and `event` when it is one |
 | DELETE | `/feed/posts/:id` | Delete own post (admins: any post) |
 | PUT, DELETE | `/feed/posts/:id/like` | Like or unlike |
 | GET | `/feed/posts/:id/likes` | Who liked it |
@@ -51,21 +51,30 @@ a login and then return only public posts; everything else needs a member's toke
 | GET | `/feed/reports` | Reported posts (admins) |
 | DELETE | `/feed/posts/:id/reports` | Dismiss the reports on a post (admins) |
 | GET | `/feed/posts/:id/comments` | Comments, oldest first; replies carry `parentId` |
-| POST | `/feed/posts/:id/comments` | Comment: `{ body, parentId }` |
+| POST | `/feed/posts/:id/comments` | Comment: `{ body, parentId, attachmentIds }`, with up to 4 files |
 | DELETE | `/feed/comments/:id` | Delete own comment (admins: any comment) |
 | PUT, DELETE | `/feed/comments/:id/like` | Like or unlike a comment |
 | GET | `/feed/comments/:id/likes` | Who liked the comment |
-| POST | `/feed/attachments` | Upload a file (multipart field `file`, max 10 MB) to attach to a post |
+| POST | `/feed/attachments` | Upload a file (multipart field `file`, max 10 MB) to attach to a post or comment |
 | GET | `/feed/attachments/:id` | The file. Needs a login unless its post is public |
 | GET | `/members/:id/avatar` | Profile picture of a feed author |
 | GET | `/notifications` | Own notifications and the number of unread ones |
 | POST | `/notifications/read` | Mark as read: `{ ids }`, or everything without `ids` |
+| GET | `/events?from=&to=` | Events in the order they take place, the ones without a date last. Visitors get the public ones |
+| PUT | `/events/:id/rsvp` | Answer a closed (`members`) event: `{ answer }` is `yes`, `no`, or `null` to take it back |
+| GET | `/events/:id/rsvps` | Who answered what |
+| POST | `/events/:id/announcements` | Message from the organizer to every member: `{ body }` |
 
 - **Admins** are members of the `ADMIN_GROUP` group. Only they can pin posts and see
   reports, and they can delete other members' posts and comments.
 - **Names and pictures** come from LLDAP and are copied to the database for up to ten
   minutes. Members are identified by a random id in the feed, never by username.
 - **Notifications** are made when someone comments on your post or replies to your comment.
+  A new event, and a message from its organizer, is a notification for every other member.
+- **Events** are posts with a title, a place and a time, so they are seen, commented on,
+  edited and deleted like any post. Only closed (`members`) events have sign-up, and it
+  closes when the event is over. Whether an event is planned, on or done follows from its
+  times and isn't stored.
 - **Files** are stored in the database. JPEG, PNG, GIF and WebP are shown as pictures;
   anything else is only offered as a download. An upload that isn't put in a post within a
   day is deleted. A poll can't be changed once the post is published.

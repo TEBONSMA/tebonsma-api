@@ -3,6 +3,7 @@ import { bodyLimit } from 'hono/body-limit'
 import { HTTPException } from 'hono/http-exception'
 import { findCaller, isAdmin, requireCaller, type Env } from './auth.ts'
 import type { Caller } from './authelia.ts'
+import type { EventInput } from './events.ts'
 import {
   addComment,
   createPost,
@@ -19,6 +20,7 @@ import {
   markNotificationsRead,
   MAX_ATTACHMENT_BYTES,
   MAX_ATTACHMENTS,
+  MAX_COMMENT_ATTACHMENTS,
   readAttachment,
   reportPost,
   saveAttachment,
@@ -39,26 +41,28 @@ const MAX_COMMENT_LENGTH = 2000
 const MAX_REASON_LENGTH = 500
 const MAX_POLL_OPTIONS = 6
 const MAX_POLL_OPTION_LENGTH = 80
+const MAX_EVENT_TITLE_LENGTH = 120
+const MAX_EVENT_LOCATION_LENGTH = 200
 const PAGE_SIZE = 10
 const MAX_PAGE_SIZE = 30
 
 const toViewer = (caller: Caller): Viewer => ({ username: caller.username, admin: isAdmin(caller) })
-const viewerOf = (c: Context<Env>) => toViewer(c.get('caller'))
-const visitorOf = async (c: Context) => {
+export const viewerOf = (c: Context<Env>) => toViewer(c.get('caller'))
+export const visitorOf = async (c: Context) => {
   const caller = await findCaller(c)
   return caller ? toViewer(caller) : null
 }
 
-const bad = (message: string) => new HTTPException(400, { message })
+export const bad = (message: string) => new HTTPException(400, { message })
 
-async function readBody(c: Context) {
+export async function readBody(c: Context) {
   const body = await c.req.json().catch(() => null)
   if (!body || typeof body !== 'object' || Array.isArray(body)) throw bad('Ugyldig forespørsel')
   return body as Record<string, unknown>
 }
 
 // Line breaks and tabs are kept; other control characters have no place in a post
-function readText(raw: unknown, what: string, maxLength: number) {
+export function readText(raw: unknown, what: string, maxLength: number) {
   if (typeof raw !== 'string') throw bad(`${what} må være tekst`)
   const text = raw
     .replace(/\r\n?/g, '\n')
@@ -68,14 +72,48 @@ function readText(raw: unknown, what: string, maxLength: number) {
   return text
 }
 
+function readAttachmentIds(raw: unknown, max: number, what: string) {
+  if (!Array.isArray(raw) || raw.some(id => typeof id !== 'string')) throw bad('Ugyldige vedlegg')
+  const ids = [...new Set(raw as string[])]
+  if (ids.length > max) throw bad(`${what} kan ha opptil ${max} vedlegg`)
+  return ids
+}
+
+// Times are stored the way JavaScript writes them, so they can be compared as text
+function readTime(raw: unknown) {
+  const time = typeof raw === 'string' ? new Date(raw) : null
+  if (!time || Number.isNaN(time.getTime())) throw bad('Ugyldig tidspunkt')
+  return time.toISOString()
+}
+
+function readEvent(raw: unknown): EventInput | null {
+  if (raw === undefined || raw === null) return null
+  if (typeof raw !== 'object' || Array.isArray(raw)) throw bad('Ugyldig arrangement')
+  const { title, location, startsAt = null, endsAt = null } = raw as Record<string, unknown>
+
+  const event: EventInput = {
+    // A title is one line
+    title: readText(title, 'Tittelen', MAX_EVENT_TITLE_LENGTH).replace(/\s+/g, ' '),
+    location: readText(location ?? '', 'Stedet', MAX_EVENT_LOCATION_LENGTH).replace(/\s+/g, ' '),
+    startsAt: startsAt === null ? null : readTime(startsAt),
+    endsAt: endsAt === null ? null : readTime(endsAt),
+  }
+  if (!event.title) throw bad('Arrangementet trenger en tittel')
+  if ((event.startsAt === null) !== (event.endsAt === null)) throw bad('Oppgi både start og slutt, eller ingen av dem')
+  if (event.startsAt && event.endsAt && event.endsAt <= event.startsAt) throw bad('Arrangementet må slutte etter at det starter')
+  return event
+}
+
 function readPostInput(body: Record<string, unknown>): PostInput {
   const { visibility, attachmentIds = [] } = body
   if (visibility !== 'public' && visibility !== 'members') throw bad('Velg hvem som skal se innlegget')
-  if (!Array.isArray(attachmentIds) || attachmentIds.some(id => typeof id !== 'string')) throw bad('Ugyldige vedlegg')
-  const ids = [...new Set(attachmentIds as string[])]
-  if (ids.length > MAX_ATTACHMENTS) throw bad(`Et innlegg kan ha opptil ${MAX_ATTACHMENTS} vedlegg`)
 
-  return { body: readText(body.body ?? '', 'Innlegget', MAX_POST_LENGTH), visibility, attachmentIds: ids }
+  return {
+    body: readText(body.body ?? '', 'Innlegget', MAX_POST_LENGTH),
+    visibility,
+    attachmentIds: readAttachmentIds(attachmentIds, MAX_ATTACHMENTS, 'Et innlegg'),
+    event: readEvent(body.event),
+  }
 }
 
 function readPollOptions(raw: unknown) {
@@ -109,8 +147,10 @@ feedRoutes.post('/feed/posts', requireCaller, async c => {
   const body = await readBody(c)
   const input = readPostInput(body)
   const pollOptions = readPollOptions(body.pollOptions)
+  if (pollOptions.length > 0 && input.event) throw bad('Et arrangement kan ikke ha spørreundersøkelse')
   if (pollOptions.length > 0 && !input.body) throw bad('Skriv spørsmålet i innlegget')
-  if (!input.body && input.attachmentIds.length === 0) throw bad('Innlegget er tomt')
+  // The title is enough for an event
+  if (!input.event && !input.body && input.attachmentIds.length === 0) throw bad('Innlegget er tomt')
   return c.json(await createPost(viewerOf(c), input, pollOptions), 201)
 })
 
@@ -119,7 +159,9 @@ feedRoutes.patch('/feed/posts/:id', requireCaller, async c => {
   const viewer = viewerOf(c)
   const id = c.req.param('id')
   const input = readPostInput(await readBody(c))
-  if (!input.body && (input.attachmentIds.length === 0 || (await getPost(viewer, id)).poll)) throw bad('Innlegget er tomt')
+  if (!input.event && !input.body && (input.attachmentIds.length === 0 || (await getPost(viewer, id)).poll)) {
+    throw bad('Innlegget er tomt')
+  }
   return c.json(await updatePost(viewer, id, input))
 })
 
@@ -162,11 +204,12 @@ feedRoutes.get('/feed/posts/:id/comments', async c => c.json(await listComments(
 
 feedRoutes.post('/feed/posts/:id/comments', requireCaller, async c => {
   const body = await readBody(c)
-  const text = readText(body.body, 'Kommentaren', MAX_COMMENT_LENGTH)
-  if (!text) throw bad('Kommentaren er tom')
+  const text = readText(body.body ?? '', 'Kommentaren', MAX_COMMENT_LENGTH)
+  const attachmentIds = readAttachmentIds(body.attachmentIds ?? [], MAX_COMMENT_ATTACHMENTS, 'En kommentar')
+  if (!text && attachmentIds.length === 0) throw bad('Kommentaren er tom')
   const { parentId = null } = body
   if (parentId !== null && typeof parentId !== 'string') throw bad('Ugyldig forespørsel')
-  return c.json(await addComment(viewerOf(c), c.req.param('id'), text, parentId), 201)
+  return c.json(await addComment(viewerOf(c), c.req.param('id'), text, parentId, attachmentIds), 201)
 })
 
 feedRoutes.delete('/feed/comments/:id', requireCaller, c => {
