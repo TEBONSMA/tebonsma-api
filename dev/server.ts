@@ -10,6 +10,8 @@ if (process.env.NODE_ENV === 'production') {
 
 const mockUrl = startMockAuth(Number(process.env.MOCK_AUTH_PORT ?? 9091))
 
+// Not 8080: other local software often has it, and a browser may reach that instead of the API
+process.env.PORT ??= '8787'
 process.env.OIDC_USERINFO_URL ??= `${mockUrl}/api/oidc/userinfo`
 process.env.LLDAP_URL ??= mockUrl
 process.env.LLDAP_USERNAME ??= 'mock'

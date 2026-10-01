@@ -203,9 +203,11 @@ export function startMockAuth(port: number) {
     c.json({ token: unsignedJwt({ exp: Math.floor(Date.now() / 1000) + 24 * 60 * 60 }) }),
   )
 
-  // Only understands the two operations in src/lldap.ts, told apart by their variables
+  // Answers the operations in src/lldap.ts by name. Anything else is an error, so a new LLDAP
+  // call in the API shows up here instead of quietly getting a wrong answer.
   app.post('/api/graphql', async c => {
-    const { variables = {} } = (await c.req.json()) as {
+    const { query = '', variables = {} } = (await c.req.json()) as {
+      query?: string
       variables?: {
         id?: string
         user?: {
@@ -216,11 +218,18 @@ export function startMockAuth(port: number) {
         }
       }
     }
-    const username = variables.user?.id ?? variables.id ?? ''
+    const operation = query.match(/^\s*(?:query|mutation)\s+(\w+)/)?.[1]
+    if (operation !== 'User' && operation !== 'Update') {
+      return c.json({
+        errors: [{ message: `The mock LLDAP does not know the operation '${operation ?? 'unnamed'}'. Add it to dev/mock-auth.ts.` }],
+      })
+    }
+
+    const username = (operation === 'Update' ? variables.user?.id : variables.id) ?? ''
     const user = users.get(username)
     if (!user) return c.json({ errors: [{ message: `Entity not found: \`No such user: '${username}'\`` }] })
 
-    if (variables.user) {
+    if (operation === 'Update' && variables.user) {
       const { displayName, insertAttributes = [], removeAttributes = [] } = variables.user
       const attributes = { first_name: 'firstName', last_name: 'lastName', avatar: 'avatar' } as const
       const isKnown = (name: string): name is keyof typeof attributes => name in attributes

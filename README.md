@@ -100,9 +100,11 @@ npm run dev
 npm run dev:mock
 ```
 
-This starts the API on port 8080 together with a mock server on `http://localhost:9091`
+This starts the API on port 8787 together with a mock server on `http://localhost:9091`
 that stands in for both Authelia and LLDAP, so no credentials or environment variables are
-needed. The API code in `src/` runs unchanged; it is only pointed at the mock.
+needed. The API code in `src/` runs unchanged; it is only pointed at the mock. The port is
+not 8080 because other local software often uses that, and the browser may then reach it
+instead of the API. Set `PORT` to use another one, and `VITE_API_URL` in the site to match.
 
 The mock's login page has no passwords. You pick who to log in as:
 
@@ -119,11 +121,13 @@ To use it from the site, run `npm run dev:mock` in the Tebonsma.no repo's `teb-a
 as well. To call the API directly, the access token is `mock-access.<username>`:
 
 ```bash
-curl -H "Authorization: Bearer mock-access.dev" http://localhost:8080/me
+curl -H "Authorization: Bearer mock-access.dev" http://localhost:8787/me
 ```
 
 The mock lives in `dev/`, which is not copied into the Docker image. It only listens on
-127.0.0.1 and refuses to start when `NODE_ENV` is `production`.
+127.0.0.1 and refuses to start when `NODE_ENV` is `production`. Its user directory only
+answers the GraphQL operations the API uses today (`User` and `Update`); a new one returns
+an error until it is added to `dev/mock-auth.ts`.
 
 ## Security
 
