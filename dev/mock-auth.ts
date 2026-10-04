@@ -27,7 +27,7 @@ const users = new Map<string, MockUser>([
       firstName: 'Dev',
       lastName: 'Bruker',
       avatar: null,
-      groups: ['tebonsma'],
+      groups: ['medlemmer'],
       createdAt: '2025-01-01T12:00:00Z',
     },
   ],
@@ -39,7 +39,7 @@ const users = new Map<string, MockUser>([
       firstName: 'Kari',
       lastName: 'Nordmann',
       avatar: null,
-      groups: ['tebonsma'],
+      groups: ['medlemmer'],
       createdAt: '2025-01-01T12:00:00Z',
     },
   ],
@@ -51,7 +51,7 @@ const users = new Map<string, MockUser>([
       firstName: 'Ola',
       lastName: 'Nordmann',
       avatar: null,
-      groups: ['tebonsma'],
+      groups: ['medlemmer'],
       createdAt: '2025-01-01T12:00:00Z',
     },
   ],
@@ -63,7 +63,7 @@ const users = new Map<string, MockUser>([
       firstName: 'Admin',
       lastName: 'Bruker',
       avatar: null,
-      groups: ['tebonsma', 'lldap_admin'],
+      groups: ['lldap_admin'],
       createdAt: '2025-01-01T12:00:00Z',
     },
   ],
@@ -234,6 +234,7 @@ export function startMockAuth(port: number) {
       query?: string
       variables?: {
         id?: string
+        group?: string
         user?: {
           id: string
           displayName?: string
@@ -243,9 +244,10 @@ export function startMockAuth(port: number) {
       }
     }
     const operation = query.match(/^\s*(?:query|mutation)\s+(\w+)/)?.[1]
-    // Every account, like LLDAP's own admin and the API's service account in the real directory
-    if (operation === 'Users') {
-      return c.json({ data: { users: [...users.keys(), 'mock'].map(id => ({ id })) } })
+    // The users of one group
+    if (operation === 'Members') {
+      const members = [...users].filter(([, user]) => user.groups.includes(variables.group ?? ''))
+      return c.json({ data: { users: members.map(([id]) => ({ id })) } })
     }
     if (operation !== 'User' && operation !== 'Update') {
       return c.json({

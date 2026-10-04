@@ -28,7 +28,8 @@ import { bad, readBody, readText, viewerOf } from './feedRoutes.ts'
 
 const MAX_QUESTION_LENGTH = 140
 const MAX_OUTCOME_LENGTH = 60
-const MAX_OUTCOMES = 8
+// Room for every member of TEBONSMA and then some
+const MAX_OUTCOMES = 10
 const MAX_SLIPS = 20
 const MAX_SELECTIONS = 10
 const MAX_STAKE = 1_000_000

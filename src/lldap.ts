@@ -71,9 +71,9 @@ const USER_QUERY = `
   }
 `
 
-const USERS_QUERY = `
-  query Users {
-    users { id }
+const MEMBERS_QUERY = `
+  query Members($group: String!) {
+    users(filters: { memberOf: $group }) { id }
   }
 `
 
@@ -109,9 +109,9 @@ export async function getProfile(username: string): Promise<Profile> {
   }
 }
 
-// Every account in the directory, by username
-export async function listUsernames() {
-  const { users } = await graphql<{ users: { id: string }[] }>(USERS_QUERY, {})
+// The usernames of everyone in a group
+export async function listGroupMembers(group: string) {
+  const { users } = await graphql<{ users: { id: string }[] }>(MEMBERS_QUERY, { group })
   return users.map(user => user.id)
 }
 

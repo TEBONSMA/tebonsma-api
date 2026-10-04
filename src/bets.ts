@@ -3,7 +3,7 @@ import { HTTPException } from 'hono/http-exception'
 import { config } from './config.ts'
 import { db, transaction } from './db.ts'
 import type { Viewer } from './feed.ts'
-import { listUsernames } from './lldap.ts'
+import { listGroupMembers } from './lldap.ts'
 import { getMembers, usernameOf } from './members.ts'
 import {
   combine,
@@ -495,13 +495,10 @@ export async function listOther(viewer: Viewer) {
 export const hasOpenMarkets = (eventId: string) =>
   !!db.prepare("SELECT 1 FROM bet_markets WHERE event_id = ? AND status = 'open'").get(eventId)
 
-// Accounts that aren't people: LLDAP's own admin and the API's service account
-const NOT_MEMBERS = new Set(['admin', config.lldap.username])
-
-// Everyone who can be kept out of a market
+// The members of TEBONSMA: everyone who can be kept out of a market, or added as outcomes.
+// The member group leaves out LLDAP's own admin, the API's service account and other accounts.
 export async function listMembers() {
-  const usernames = (await listUsernames()).filter(username => !NOT_MEMBERS.has(username))
-  const members = await getMembers(usernames)
+  const members = await getMembers(await listGroupMembers(config.memberGroup))
   return [...members.values()].sort((a, b) => a.name.localeCompare(b.name, 'nb'))
 }
 

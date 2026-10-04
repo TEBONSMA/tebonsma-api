@@ -86,7 +86,7 @@ Members bet TEB coins, which are only for fun, on things that may happen at an e
 member starts with 1 000 coins the first time they open TebBet and gets 100 more every Monday
 (Norwegian time). Everything under `/bet` needs a login.
 
-A **market** is a question: yes/no, two to eight named outcomes, or over/under, where members
+A **market** is a question: yes/no, two to ten named outcomes, or over/under, where members
 pick a line on a count (like 4,5 beers) and bet over or under it. Markets on an event are run
 (opened, closed, decided, called off, reopened) by the event's organizer and admins; the
 organizer can turn betting off for an event (`event.betting` on the post), which hides it from
@@ -105,7 +105,7 @@ paid back out again.
 | GET | `/bet/events` | Coming events and recent results, with their markets and current odds |
 | GET | `/bet/events/:id` | One event, every market on it and the latest bets |
 | GET | `/bet/other` | The markets that aren't about an event, and their latest bets |
-| GET | `/bet/members` | Everyone who can be kept out of a market: all accounts but LLDAP's `admin` and the API's own |
+| GET | `/bet/members` | The members (`MEMBER_GROUP`), to keep out of a market or add as its outcomes |
 | POST | `/bet/events/:id/markets` | Open a market: `{ question, kind, outcomes: [{ label, odds }], closesAt, excluded }` |
 | POST | `/bet/markets` | Open a market that isn't about an event (admins), same body |
 | PATCH | `/bet/markets/:id` | Change `question`, `closesAt` or `excluded` of an undecided market |
@@ -177,6 +177,7 @@ This stops casual cheating, not a determined player. To add a game, give it an e
 | `PORT` | `8080` | Port to listen on |
 | `DATA_DIR` | `./data` (`/app/data` in Docker) | Folder for the SQLite database |
 | `ADMIN_GROUP` | `lldap_admin` | Group whose members moderate the feed |
+| `MEMBER_GROUP` | `medlemmer` | Group of the members of TEBONSMA, for TebBet's list of members |
 
 Put the credentials in `.env` (see `.env.example`). It is git-ignored and should never be
 committed.
@@ -233,9 +234,9 @@ The mock's login page has no passwords. You pick who to log in as:
 
 | User | Groups | For testing |
 |---|---|---|
-| `dev` | `tebonsma` | An ordinary member |
-| `kari`, `ola` | `tebonsma` | More members, for TebBet and keeping members out of markets |
-| `admin` | `tebonsma`, `lldap_admin` | What admins see |
+| `dev` | `medlemmer` | An ordinary member |
+| `kari`, `ola` | `medlemmer` | More members, for TebBet and keeping members out of markets |
+| `admin` | `lldap_admin` | What admins see |
 
 Profile edits, scores and the feed are reset when the server restarts, which also happens
 when you save a file. They are kept in `./data/mock` while it runs; set `DATA_DIR` to
