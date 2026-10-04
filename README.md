@@ -64,6 +64,10 @@ a login and then return only public posts; everything else needs a member's toke
 | PUT | `/events/:id/rsvp` | Answer a closed (`members`) event: `{ answer }` is `yes`, `no`, or `null` to take it back |
 | GET | `/events/:id/rsvps` | Who answered what |
 | POST | `/events/:id/announcements` | Message from the organizer to every member: `{ body }` |
+| GET | `/calendar.ics` | The public events as an iCalendar feed for calendar apps to subscribe to |
+| GET | `/calendar/:secret.ics` | A member's feed, with the closed events too. No login; the secret in the address is the key |
+| GET | `/me/calendar` | Where the caller's own feed is: `{ path }`. Made the first time it is asked for |
+| POST | `/me/calendar` | Give the caller's feed a new address, so the old one stops working |
 
 - **Admins** are members of the `ADMIN_GROUP` group. Only they can pin posts and see
   reports, and they can delete other members' posts and comments.
@@ -75,6 +79,9 @@ a login and then return only public posts; everything else needs a member's toke
   edited and deleted like any post. Only closed (`members`) events have sign-up, and it
   closes when the event is over. Whether an event is planned, on or done follows from its
   times and isn't stored.
+- **Calendar feeds** hold the dated events from the last year on. Calendar apps fetch them
+  again on their own (Google roughly once or twice a day), so changes follow. A member's
+  feed is checked against LLDAP, and stops answering when the account is gone.
 - **Files** are stored in the database. JPEG, PNG, GIF and WebP are shown as pictures;
   anything else is only offered as a download. An upload that isn't put in a post within a
   day is deleted. A poll can't be changed once the post is published.
@@ -113,6 +120,7 @@ This stops casual cheating, not a determined player. To add a game, give it an e
 | `LLDAP_URL` | `http://lldap:17170` | LLDAP's HTTP address |
 | `OIDC_USERINFO_URL` | `https://auth.tebonsma.no/api/oidc/userinfo` | Where tokens are checked |
 | `ALLOWED_ORIGINS` | `https://tebonsma.no` | Comma-separated sites allowed to call the API (CORS) |
+| `SITE_URL` | `https://tebonsma.no` | Where the site is, for links to events in the calendar feeds |
 | `PORT` | `8080` | Port to listen on |
 | `DATA_DIR` | `./data` (`/app/data` in Docker) | Folder for the SQLite database |
 | `ADMIN_GROUP` | `lldap_admin` | Group whose members moderate the feed |

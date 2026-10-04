@@ -10,6 +10,8 @@ export const config = {
     .split(',')
     .map(origin => origin.trim())
     .filter(Boolean),
+  // Where the site is, for links back to it from calendars
+  siteUrl: (process.env.SITE_URL ?? 'https://tebonsma.no').replace(/\/$/, ''),
   userinfoUrl: process.env.OIDC_USERINFO_URL ?? 'https://auth.tebonsma.no/api/oidc/userinfo',
   dataDir: process.env.DATA_DIR ?? './data',
   // Members of this group can pin posts, handle reports and remove other members' posts

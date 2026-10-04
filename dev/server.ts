@@ -17,6 +17,7 @@ process.env.LLDAP_URL ??= mockUrl
 process.env.LLDAP_USERNAME ??= 'mock'
 process.env.LLDAP_PASSWORD ??= 'mock'
 process.env.ALLOWED_ORIGINS ??= 'http://localhost:5173'
+process.env.SITE_URL ??= 'http://localhost:5173'
 
 // Like the mock users' profiles, the scoreboard starts empty on every restart
 if (!process.env.DATA_DIR) {

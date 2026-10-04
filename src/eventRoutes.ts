@@ -1,6 +1,7 @@
-import { Hono } from 'hono'
+import { Hono, type Context } from 'hono'
 import { bodyLimit } from 'hono/body-limit'
 import { requireCaller, type Env } from './auth.ts'
+import { calendarFeed, calendarPath, calendarViewer, resetCalendarPath } from './calendar.ts'
 import { listRsvps, setRsvp } from './events.ts'
 import { getPost, listEvents, sendAnnouncement } from './feed.ts'
 import { bad, readBody, readText, viewerOf, visitorOf } from './feedRoutes.ts'
@@ -45,3 +46,22 @@ eventRoutes.post('/events/:id/announcements', requireCaller, async c => {
   sendAnnouncement(viewerOf(c), c.req.param('id'), text)
   return c.json({ ok: true }, 201)
 })
+
+// The calendar for calendar apps to subscribe to. They can't send a token, so the public
+// events have an open address and each member has a secret one with the closed events too.
+const ics = (c: Context, feed: string, cache: 'public' | 'private') =>
+  c.body(feed, 200, {
+    'Content-Type': 'text/calendar; charset=utf-8',
+    'Content-Disposition': 'inline; filename="tebonsma.ics"',
+    'Cache-Control': `${cache}, max-age=900`,
+  })
+
+eventRoutes.get('/calendar.ics', async c => ics(c, await calendarFeed(null), 'public'))
+
+eventRoutes.get('/calendar/:file{.+\\.ics}', async c =>
+  ics(c, await calendarFeed(await calendarViewer(c.req.param('file').slice(0, -'.ics'.length))), 'private'),
+)
+
+eventRoutes.get('/me/calendar', requireCaller, c => c.json({ path: calendarPath(c.get('caller').username) }))
+
+eventRoutes.post('/me/calendar', requireCaller, c => c.json({ path: resetCalendarPath(c.get('caller').username) }))
