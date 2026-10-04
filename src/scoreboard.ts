@@ -1,8 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { mkdirSync } from 'node:fs'
-import { join } from 'node:path'
-import { DatabaseSync } from 'node:sqlite'
-import { config } from './config.ts'
+import { db } from './db.ts'
 
 export const LEADERBOARD_SIZE = 5
 
@@ -35,8 +32,6 @@ export const isGame = (game: string) => Object.hasOwn(GAMES, game)
 
 export class ScoreRejected extends Error {}
 
-mkdirSync(config.dataDir, { recursive: true })
-const db = new DatabaseSync(join(config.dataDir, 'tebonsma.db'))
 db.exec(`
   CREATE TABLE IF NOT EXISTS game_scores (
     game         TEXT NOT NULL,

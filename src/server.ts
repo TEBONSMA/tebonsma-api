@@ -2,25 +2,24 @@ import { serve } from '@hono/node-server'
 import { Hono, type Context } from 'hono'
 import { bodyLimit } from 'hono/body-limit'
 import { cors } from 'hono/cors'
-import { createMiddleware } from 'hono/factory'
 import { HTTPException } from 'hono/http-exception'
-import { verifyAccessToken, type Caller } from './authelia.ts'
+import { requireCaller, type Env } from './auth.ts'
 import { config } from './config.ts'
-import { getProfile, setAvatar, updateProfile, type ProfileChanges } from './lldap.ts'
+import { eventRoutes } from './eventRoutes.ts'
+import { feedRoutes } from './feedRoutes.ts'
+import { getProfile as readProfile, setAvatar, updateProfile, type ProfileChanges } from './lldap.ts'
+import { rememberProfile } from './members.ts'
 import { getLeaderboard, isGame, ScoreRejected, startRun, submitScore } from './scoreboard.ts'
-
-type Env = { Variables: { caller: Caller } }
 
 const app = new Hono<Env>()
 
-// The account being read or changed is always the one the access token belongs to
-const requireCaller = createMiddleware<Env>(async (c, next) => {
-  const token = c.req.header('Authorization')?.match(/^Bearer (.+)$/)?.[1]
-  const caller = token ? await verifyAccessToken(token) : null
-  if (!caller) throw new HTTPException(401, { message: 'Ikke innlogget' })
-  c.set('caller', caller)
-  await next()
-})
+// Every profile read here is fresh from LLDAP, so the feed's copy of names and pictures
+// is brought up to date along the way
+async function getProfile(username: string) {
+  const profile = await readProfile(username)
+  rememberProfile(profile)
+  return profile
+}
 
 app.use(
   '*',
@@ -123,6 +122,9 @@ app.get('/games/:game/leaderboard', requireCaller, c => gameLeaderboard(c, gameP
 app.post('/flappy/runs', requireCaller, c => startGameRun(c, 'flappy-teb'))
 app.post('/flappy/scores', requireCaller, c => submitGameScore(c, 'flappy-teb'))
 app.get('/flappy/leaderboard', requireCaller, c => gameLeaderboard(c, 'flappy-teb'))
+
+app.route('/', feedRoutes)
+app.route('/', eventRoutes)
 
 app.onError((err, c) => {
   if (err instanceof HTTPException) return c.json({ error: err.message }, err.status)
