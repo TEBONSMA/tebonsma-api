@@ -32,6 +32,30 @@ const users = new Map<string, MockUser>([
     },
   ],
   [
+    'kari',
+    {
+      email: 'kari@tebonsma.test',
+      displayName: 'Kari Nordmann',
+      firstName: 'Kari',
+      lastName: 'Nordmann',
+      avatar: null,
+      groups: ['tebonsma'],
+      createdAt: '2025-01-01T12:00:00Z',
+    },
+  ],
+  [
+    'ola',
+    {
+      email: 'ola@tebonsma.test',
+      displayName: 'Ola Nordmann',
+      firstName: 'Ola',
+      lastName: 'Nordmann',
+      avatar: null,
+      groups: ['tebonsma'],
+      createdAt: '2025-01-01T12:00:00Z',
+    },
+  ],
+  [
     'admin',
     {
       email: 'admin@tebonsma.test',
@@ -219,6 +243,10 @@ export function startMockAuth(port: number) {
       }
     }
     const operation = query.match(/^\s*(?:query|mutation)\s+(\w+)/)?.[1]
+    // Every account, like LLDAP's own admin and the API's service account in the real directory
+    if (operation === 'Users') {
+      return c.json({ data: { users: [...users.keys(), 'mock'].map(id => ({ id })) } })
+    }
     if (operation !== 'User' && operation !== 'Update') {
       return c.json({
         errors: [{ message: `The mock LLDAP does not know the operation '${operation ?? 'unnamed'}'. Add it to dev/mock-auth.ts.` }],

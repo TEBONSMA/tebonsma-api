@@ -88,6 +88,10 @@ export async function getMembers(usernames: Iterable<string>) {
   return new Map(unique.map(username => [username, toPublic(findRow(username)!)]))
 }
 
+// The member behind a public id, if the API has seen them
+export const usernameOf = (id: string) =>
+  (db.prepare('SELECT username FROM members WHERE id = ?').get(id) as { username: string } | undefined)?.username
+
 export function getAvatar(id: string) {
   const row = db.prepare('SELECT avatar FROM members WHERE id = ?').get(id) as { avatar: Uint8Array | null } | undefined
   return row?.avatar ?? null

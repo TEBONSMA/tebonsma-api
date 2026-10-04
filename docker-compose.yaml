@@ -9,7 +9,7 @@ services:
       LLDAP_URL: http://lldap:17170
       OIDC_USERINFO_URL: https://auth.tebonsma.no/api/oidc/userinfo
       # Production only; local development uses the mock (npm run dev:mock)
-      ALLOWED_ORIGINS: https://tebonsma.no
+      ALLOWED_ORIGINS: https://tebonsma.no,https://bet.tebonsma.no
     volumes:
       - data:/app/data
     # Same network as lldap and the konto-tebonsma tunnel, which routes api.tebonsma.no here

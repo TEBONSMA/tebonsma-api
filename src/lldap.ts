@@ -71,6 +71,12 @@ const USER_QUERY = `
   }
 `
 
+const USERS_QUERY = `
+  query Users {
+    users { id }
+  }
+`
+
 const UPDATE_MUTATION = `
   mutation Update($user: UpdateUserInput!) {
     updateUser(user: $user) { ok }
@@ -101,6 +107,12 @@ export async function getProfile(username: string): Promise<Profile> {
     groups: user.groups.map(g => g.displayName),
     createdAt: user.creationDate,
   }
+}
+
+// Every account in the directory, by username
+export async function listUsernames() {
+  const { users } = await graphql<{ users: { id: string }[] }>(USERS_QUERY, {})
+  return users.map(user => user.id)
 }
 
 export async function updateProfile(username: string, changes: ProfileChanges) {

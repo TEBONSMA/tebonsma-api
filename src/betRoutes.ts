@@ -1,0 +1,195 @@
+import { Hono, type Context } from 'hono'
+import { bodyLimit } from 'hono/body-limit'
+import { requireCaller, type Env } from './auth.ts'
+import {
+  closeMarket,
+  createMarket,
+  deleteMarket,
+  ensureAccount,
+  getAccount,
+  getEvent,
+  getLeaderboard,
+  getSlips,
+  listEvents,
+  listLedger,
+  listMembers,
+  listOther,
+  listSlips,
+  placeSlips,
+  reopenMarket,
+  settleMarket,
+  updateMarket,
+  voidMarket,
+  type MarketInput,
+  type SlipInput,
+} from './bets.ts'
+import { MAX_ODDS, MIN_ODDS } from './odds.ts'
+import { bad, readBody, readText, viewerOf } from './feedRoutes.ts'
+
+const MAX_QUESTION_LENGTH = 140
+const MAX_OUTCOME_LENGTH = 60
+const MAX_OUTCOMES = 8
+const MAX_SLIPS = 20
+const MAX_SELECTIONS = 10
+const MAX_STAKE = 1_000_000
+const MAX_EXCLUDED = 50
+// Over/under: the highest number the slider goes to
+const MAX_HIGHEST = 200
+
+// TebBet, the members' betting site at bet.tebonsma.no. Everything needs a login.
+export const betRoutes = new Hono<Env>()
+
+betRoutes.use('/bet/*', requireCaller, bodyLimit({ maxSize: 32 * 1024 }))
+// Opens the account on the first visit and pays the Mondays owed since the last one
+betRoutes.use('/bet/*', async (c, next) => {
+  ensureAccount(c.get('caller').username)
+  await next()
+})
+
+const readLine = (raw: unknown, what: string, maxLength: number) => readText(raw, what, maxLength).replace(/\s+/g, ' ')
+
+// Times are stored the way JavaScript writes them, so they can be compared as text
+function readTime(raw: unknown) {
+  if (raw === null) return null
+  const time = typeof raw === 'string' ? new Date(raw) : null
+  if (!time || Number.isNaN(time.getTime())) throw bad('Ugyldig tidspunkt')
+  return time.toISOString()
+}
+
+const readOdds = (raw: unknown) => {
+  const odds = typeof raw === 'number' ? Math.round(raw * 100) : NaN
+  if (!Number.isInteger(odds) || odds < MIN_ODDS || odds > MAX_ODDS) {
+    throw bad(`Oddsen må være mellom ${MIN_ODDS / 100} og ${MAX_ODDS / 100}`)
+  }
+  return odds
+}
+
+// Members kept out of a market, by their public id
+function readExcluded(raw: unknown) {
+  if (!Array.isArray(raw) || raw.some(id => typeof id !== 'string')) throw bad('Ugyldig liste over medlemmer')
+  if (raw.length > MAX_EXCLUDED) throw bad('For mange medlemmer')
+  return raw as string[]
+}
+
+function readMarket(body: Record<string, unknown>): MarketInput {
+  const question = readLine(body.question, 'Spørsmålet', MAX_QUESTION_LENGTH)
+  if (!question) throw bad('Skriv hva det skal spilles på')
+  if (body.kind !== 'yesno' && body.kind !== 'choice' && body.kind !== 'overunder') throw bad('Velg type spill')
+  const excluded = body.excluded === undefined ? [] : readExcluded(body.excluded)
+  const closesAt = body.closesAt === undefined ? {} : { closesAt: readTime(body.closesAt) }
+
+  // Over/under gets an outcome per number from 0 to the highest, around the organizer's line
+  if (body.kind === 'overunder') {
+    const { line, highest } = body
+    if (typeof highest !== 'number' || !Number.isInteger(highest) || highest < 2 || highest > MAX_HIGHEST) {
+      throw bad(`Høyeste tall må være et helt tall fra 2 til ${MAX_HIGHEST}`)
+    }
+    if (typeof line !== 'number' || line % 1 !== 0.5 || line < 0.5 || line > highest - 0.5) {
+      throw bad('Linjen må ligge mellom to hele tall, som 4,5, og under det høyeste tallet')
+    }
+    return { question, kind: 'overunder', outcomes: [], line, highest, ...closesAt, excluded }
+  }
+
+  if (!Array.isArray(body.outcomes)) throw bad('Mangler utfall')
+
+  const yesNo = body.kind === 'yesno'
+  const outcomes = body.outcomes.map((raw, i) => {
+    const { label, odds } = (raw ?? {}) as Record<string, unknown>
+    // A yes/no market always has the outcomes Ja and Nei, in that order
+    const name = yesNo ? (['Ja', 'Nei'][i] ?? '') : readLine(label, 'Utfallet', MAX_OUTCOME_LENGTH)
+    return { label: name, odds: readOdds(odds) }
+  })
+  if (yesNo) {
+    if (outcomes.length !== 2) throw bad('Et ja/nei-spill har to utfall')
+  } else {
+    if (outcomes.length < 2 || outcomes.length > MAX_OUTCOMES) throw bad(`Et spill har fra 2 til ${MAX_OUTCOMES} utfall`)
+    if (outcomes.some(o => !o.label)) throw bad('Alle utfall må ha et navn')
+    if (new Set(outcomes.map(o => o.label.toLowerCase())).size !== outcomes.length) throw bad('To utfall har samme navn')
+  }
+  return { question, kind: body.kind, outcomes, ...closesAt, excluded }
+}
+
+function readSlips(body: Record<string, unknown>): SlipInput[] {
+  const { slips } = body
+  if (!Array.isArray(slips) || slips.length === 0) throw bad('Kupongen er tom')
+  if (slips.length > MAX_SLIPS) throw bad(`Du kan spille opptil ${MAX_SLIPS} spill om gangen`)
+  return slips.map(raw => {
+    const { stake, selections } = (raw ?? {}) as Record<string, unknown>
+    if (typeof stake !== 'number' || !Number.isInteger(stake) || stake < 1 || stake > MAX_STAKE) {
+      throw bad('Innsatsen må være et helt antall mynter')
+    }
+    if (!Array.isArray(selections) || selections.length === 0) throw bad('Kupongen er tom')
+    if (selections.length > MAX_SELECTIONS) throw bad(`En kombinasjon kan ha opptil ${MAX_SELECTIONS} utfall`)
+    return {
+      stake,
+      selections: selections.map(selection => {
+        const { outcomeId, marketId, side, line, odds } = (selection ?? {}) as Record<string, unknown>
+        if (typeof odds !== 'number') throw bad('Ugyldig kupong')
+        if (typeof outcomeId === 'string') return { outcomeId, odds }
+        if (typeof marketId === 'string' && (side === 'over' || side === 'under') && typeof line === 'number') {
+          return { marketId, side, line, odds }
+        }
+        throw bad('Ugyldig kupong')
+      }),
+    }
+  })
+}
+
+const id = (c: Context) => c.req.param('id') ?? ''
+
+betRoutes.get('/bet/me', async c => c.json(await getAccount(viewerOf(c))))
+
+betRoutes.get('/bet/events', async c => c.json(await listEvents(viewerOf(c))))
+betRoutes.get('/bet/other', async c => c.json(await listOther(viewerOf(c))))
+betRoutes.get('/bet/members', async c => c.json(await listMembers()))
+betRoutes.get('/bet/events/:id', async c => c.json(await getEvent(viewerOf(c), id(c))))
+
+betRoutes.post('/bet/events/:id/markets', async c => {
+  const market = createMarket(viewerOf(c), id(c), readMarket(await readBody(c)))
+  return c.json(market, 201)
+})
+
+// A market that isn't about an event; only admins
+betRoutes.post('/bet/markets', async c => {
+  const market = createMarket(viewerOf(c), null, readMarket(await readBody(c)))
+  return c.json(market, 201)
+})
+
+betRoutes.patch('/bet/markets/:id', async c => {
+  const body = await readBody(c)
+  const question = body.question === undefined ? undefined : readLine(body.question, 'Spørsmålet', MAX_QUESTION_LENGTH)
+  if (question === '') throw bad('Skriv hva det skal spilles på')
+  const closesAt = body.closesAt === undefined ? undefined : readTime(body.closesAt)
+  const excluded = body.excluded === undefined ? undefined : readExcluded(body.excluded)
+  return c.json(updateMarket(viewerOf(c), id(c), { question, closesAt, excluded }))
+})
+
+betRoutes.post('/bet/markets/:id/close', c => c.json(closeMarket(viewerOf(c), id(c))))
+
+// The winning outcome, or for over/under the number it ended on
+betRoutes.post('/bet/markets/:id/settle', async c => {
+  const { outcomeId, value } = await readBody(c)
+  if (typeof outcomeId === 'string') return c.json(settleMarket(viewerOf(c), id(c), { outcomeId }))
+  if (typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= MAX_STAKE) {
+    return c.json(settleMarket(viewerOf(c), id(c), { value }))
+  }
+  throw bad('Velg hva som skjedde')
+})
+
+betRoutes.post('/bet/markets/:id/void', c => c.json(voidMarket(viewerOf(c), id(c))))
+betRoutes.post('/bet/markets/:id/reopen', c => c.json(reopenMarket(viewerOf(c), id(c))))
+
+betRoutes.delete('/bet/markets/:id', c => {
+  deleteMarket(viewerOf(c), id(c))
+  return c.json({ ok: true })
+})
+
+betRoutes.post('/bet/slips', async c => {
+  const viewer = viewerOf(c)
+  const ids = placeSlips(viewer, readSlips(await readBody(c)))
+  return c.json({ slips: getSlips(viewer, ids), account: await getAccount(viewer) }, 201)
+})
+
+betRoutes.get('/bet/slips', c => c.json(listSlips(viewerOf(c), c.req.query('status') === 'settled')))
+betRoutes.get('/bet/ledger', c => c.json(listLedger(viewerOf(c))))
+betRoutes.get('/bet/leaderboard', async c => c.json(await getLeaderboard()))

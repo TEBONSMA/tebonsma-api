@@ -4,6 +4,7 @@ import { bodyLimit } from 'hono/body-limit'
 import { cors } from 'hono/cors'
 import { HTTPException } from 'hono/http-exception'
 import { requireCaller, type Env } from './auth.ts'
+import { betRoutes } from './betRoutes.ts'
 import { config } from './config.ts'
 import { eventRoutes } from './eventRoutes.ts'
 import { feedRoutes } from './feedRoutes.ts'
@@ -125,6 +126,7 @@ app.get('/flappy/leaderboard', requireCaller, c => gameLeaderboard(c, 'flappy-te
 
 app.route('/', feedRoutes)
 app.route('/', eventRoutes)
+app.route('/', betRoutes)
 
 app.onError((err, c) => {
   if (err instanceof HTTPException) return c.json({ error: err.message }, err.status)

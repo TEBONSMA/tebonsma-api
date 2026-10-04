@@ -1,8 +1,9 @@
 # tebonsma-api
 
 Small HTTP API for tebonsma.no. It lets logged-in members view and edit their own account
-in LLDAP (the site's `/konto` page), keeps the scoreboards for the site's games, and runs
-the news feed (`/feed`).
+in LLDAP (the site's `/konto` page), keeps the scoreboards for the site's games, runs
+the news feed (`/feed`), and is the backend of TebBet, the members' betting site at
+bet.tebonsma.no.
 
 ## How it works
 
@@ -79,6 +80,66 @@ a login and then return only public posts; everything else needs a member's toke
   anything else is only offered as a download. An upload that isn't put in a post within a
   day is deleted. A poll can't be changed once the post is published.
 
+### TebBet
+
+Members bet TEB coins, which are only for fun, on things that may happen at an event. Every
+member starts with 1 000 coins the first time they open TebBet and gets 100 more every Monday
+(Norwegian time). Everything under `/bet` needs a login.
+
+A **market** is a question: yes/no, two to eight named outcomes, or over/under, where members
+pick a line on a count (like 4,5 beers) and bet over or under it. Markets on an event are run
+(opened, closed, decided, called off, reopened) by the event's organizer and admins; the
+organizer can turn betting off for an event (`event.betting` on the post), which hides it from
+TebBet. Admins can also open markets that aren't about an event. Whoever opens a market can
+keep members out of it, typically the one it is about: they see it but can't play on it, and
+bets they placed before stand. A **slip** is one bet:
+a stake on one outcome (single), or on outcomes in several markets that must all happen
+(combination, odds multiplied). Odds are locked when a slip is played. When a market is
+decided, slips are paid at once; when it is called off, or its event deleted, stakes are paid
+back, and in a combination it counts as odds 1,00. Reopening a decided market takes what it
+paid back out again.
+
+| Method | Path | Does |
+|---|---|---|
+| GET | `/bet/me` | Own balance, coins in play and the next Monday |
+| GET | `/bet/events` | Coming events and recent results, with their markets and current odds |
+| GET | `/bet/events/:id` | One event, every market on it and the latest bets |
+| GET | `/bet/other` | The markets that aren't about an event, and their latest bets |
+| GET | `/bet/members` | Everyone who can be kept out of a market: all accounts but LLDAP's `admin` and the API's own |
+| POST | `/bet/events/:id/markets` | Open a market: `{ question, kind, outcomes: [{ label, odds }], closesAt, excluded }` |
+| POST | `/bet/markets` | Open a market that isn't about an event (admins), same body |
+| PATCH | `/bet/markets/:id` | Change `question`, `closesAt` or `excluded` of an undecided market |
+| POST | `/bet/markets/:id/close` | Stop betting now |
+| POST | `/bet/markets/:id/settle` | Decide it: `{ outcomeId }`, or `{ value }` for over/under |
+| POST | `/bet/markets/:id/void` | Call it off and pay the stakes back |
+| POST | `/bet/markets/:id/reopen` | Take the decision back |
+| DELETE | `/bet/markets/:id` | Remove a market nobody has played on |
+| POST | `/bet/slips` | Play: `{ slips: [{ stake, selections }] }`, all or none. A selection is `{ outcomeId, odds }`, or `{ marketId, side, line, odds }` for over/under |
+| GET | `/bet/slips?status=open\|settled` | Own slips |
+| GET | `/bet/ledger` | Own account statement |
+| GET | `/bet/leaderboard` | Everyone who has played, by coins in hand plus coins in play |
+
+`kind` is `yesno`, `choice` or `overunder`. An over/under market takes `line` (where over and
+under start out even, like `4.5`) and `highest` (the top of the slider) instead of `outcomes`.
+`excluded` is a list of member ids from `/bet/members`. `closesAt` left out means when the
+event starts; `null` means open until closed by hand.
+The `odds` sent with a slip are the ones the member was shown. If the odds have moved since,
+the slip is refused with 409 and the site shows the new ones.
+
+**How the odds move** (`src/odds.ts`): the organizer's opening odds are turned into
+probabilities, and from there a market maker using Hanson's logarithmic market scoring rule
+(LMSR) moves them. Every coin played on an outcome makes it likelier, so its odds fall and the
+others rise. A stake gets the average price over its own move, which is why a large stake gets
+a little less than the odds shown, and why nobody can earn coins for sure by betting on every
+side. The bank keeps 5 % of every payout. `DEFAULT_LIQUIDITY` (2 000 coins) sets how fast the
+odds move. Coins only move through the ledger table, so a balance is the sum of its rows.
+
+**Over/under** is the same market maker over the numbers 0, 1, 2 … up to `highest`, which also
+stands for anything above it. Betting over 4,5 buys every number from 5 up at once, so the odds
+on all lines hang together and can't be played against each other. The opening chances follow
+a Poisson distribution with the organizer's line in the middle. Lines lie halfway between whole
+numbers, so a result is always over or under.
+
 ### Game scoreboards
 
 Each game has its own scoreboard, and each member has one entry per game: their best score
@@ -112,7 +173,7 @@ This stops casual cheating, not a determined player. To add a game, give it an e
 | `LLDAP_PASSWORD` | required | Service account password |
 | `LLDAP_URL` | `http://lldap:17170` | LLDAP's HTTP address |
 | `OIDC_USERINFO_URL` | `https://auth.tebonsma.no/api/oidc/userinfo` | Where tokens are checked |
-| `ALLOWED_ORIGINS` | `https://tebonsma.no` | Comma-separated sites allowed to call the API (CORS) |
+| `ALLOWED_ORIGINS` | `https://tebonsma.no` | Comma-separated sites allowed to call the API (CORS). TebBet needs `https://bet.tebonsma.no` here too |
 | `PORT` | `8080` | Port to listen on |
 | `DATA_DIR` | `./data` (`/app/data` in Docker) | Folder for the SQLite database |
 | `ADMIN_GROUP` | `lldap_admin` | Group whose members moderate the feed |
@@ -173,6 +234,7 @@ The mock's login page has no passwords. You pick who to log in as:
 | User | Groups | For testing |
 |---|---|---|
 | `dev` | `tebonsma` | An ordinary member |
+| `kari`, `ola` | `tebonsma` | More members, for TebBet and keeping members out of markets |
 | `admin` | `tebonsma`, `lldap_admin` | What admins see |
 
 Profile edits, scores and the feed are reset when the server restarts, which also happens
@@ -180,7 +242,12 @@ when you save a file. They are kept in `./data/mock` while it runs; set `DATA_DI
 keep scores and the feed between restarts. Add or change users in `dev/mock-auth.ts`.
 
 To use it from the site, run `npm run dev:mock` in the Tebonsma.no repo's `teb-app` folder
-as well. To call the API directly, the access token is `mock-access.<username>`:
+as well, and for TebBet in the tebbet repo (it runs on port 5174; both ports are allowed).
+
+`npm run dev:mock:demo` does the same and adds three example events with TebBet markets and
+a few bets: one coming up next week (with an over/under market Dev Bruker is kept out of), one
+in two days, and one that is over, with a decided market and one waiting for its result. There
+is also a market that isn't about an event. To call the API directly, the access token is `mock-access.<username>`:
 
 ```bash
 curl -H "Authorization: Bearer mock-access.dev" http://localhost:8787/me
