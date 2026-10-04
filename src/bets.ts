@@ -16,14 +16,17 @@ import {
   payoutFor,
   prices,
   probabilitiesFromOdds,
+  severalProbabilities,
   sharesFor,
+  yesPrice,
 } from './odds.ts'
 
 // TebBet (bet.tebonsma.no): members bet TEB coins on things that may happen at an event.
 // No real money is involved. Every member gets coins to start with and more every Monday.
 //
-// A market is a question on an event with two or more outcomes. The organizer of the event
-// and admins open markets and decide them. A slip is one bet: a stake on one outcome
+// A market is a question on an event with two or more outcomes, of which one comes true, or
+// on a multi market any number. The organizer of the event and admins open markets and
+// decide them. A slip is one bet: a stake on one outcome
 // (single) or on outcomes in several markets that must all happen (combination). The odds
 // are locked when the slip is played.
 //
@@ -39,16 +42,59 @@ const BETS_SHOWN = 100
 const SLIPS_SHOWN = 100
 const LEDGER_SHOWN = 100
 
-// overunder: how many of something, bet over or under a line the member picks
-export type MarketKind = 'yesno' | 'choice' | 'overunder'
+// multi: several outcomes can come true, like who ends up on the cleaning crew.
+// overunder: how many of something, bet over or under a line the member picks.
+export type MarketKind = 'yesno' | 'choice' | 'multi' | 'overunder'
 export type Side = 'over' | 'under'
 export type MarketState = 'open' | 'closed' | 'settled' | 'void'
 export type SelectionResult = 'pending' | 'won' | 'lost' | 'void'
 
+// event_id is the event's post, and missing for markets that aren't about an event, which
+// only admins open. It has no foreign key, because a market outlives its event: when the
+// event is deleted, the market is called off and the stakes paid back.
+const MARKET_COLUMNS = `
+    id         TEXT PRIMARY KEY,
+    event_id   TEXT,
+    -- The section it is under, if any, and its place there
+    section_id TEXT REFERENCES bet_sections (id) ON DELETE SET NULL,
+    position   INTEGER NOT NULL DEFAULT 0,
+    question   TEXT NOT NULL,
+    kind       TEXT NOT NULL CHECK (kind IN ('yesno', 'choice', 'multi', 'overunder')),
+    liquidity  INTEGER NOT NULL,
+    -- Over/under: the organizer's line, where over and under start out even
+    line       REAL,
+    -- Betting stops at this time; without one it stays open until it is closed by hand
+    closes_at  TEXT,
+    status     TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'settled', 'void')),
+    -- The outcome that came true; missing on a multi market. The outcomes' won says it too.
+    winner_id  TEXT,
+    -- Over/under: the number it ended on. winner_id is its outcome, or the highest one.
+    result_value INTEGER,
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    settled_by TEXT,
+    settled_at TEXT
+`
+
+// A pick of one outcome, or on an over/under market a side of a line, which covers every number
+// above or below it. A slip has one per market, except on a multi market, where every outcome
+// is a yes/no of its own and a combination can pick several.
+const SELECTION_COLUMNS = `
+    slip_id    TEXT NOT NULL REFERENCES bet_slips (id) ON DELETE CASCADE,
+    market_id  TEXT NOT NULL REFERENCES bet_markets (id),
+    outcome_id TEXT REFERENCES bet_outcomes (id),
+    side       TEXT CHECK (side IN ('over', 'under')),
+    line       REAL,
+    odds       INTEGER NOT NULL,
+    shares     REAL NOT NULL
+`
+const SELECTION_INDEXES = `
+  CREATE UNIQUE INDEX IF NOT EXISTS bet_selections_pick ON bet_selections (slip_id, market_id, COALESCE(outcome_id, ''));
+  CREATE INDEX IF NOT EXISTS bet_selections_market ON bet_selections (market_id);
+  CREATE INDEX IF NOT EXISTS bet_selections_outcome ON bet_selections (outcome_id);
+`
+
 db.exec(`
-  -- event_id is the event's post, and missing for markets that aren't about an event, which
-  -- only admins open. It has no foreign key, because a market outlives its event: when the
-  -- event is deleted, the market is called off and the stakes paid back.
   -- Headings the organizer groups an event's markets under (event_id missing: the markets
   -- outside events), in the order they set
   CREATE TABLE IF NOT EXISTS bet_sections (
@@ -60,28 +106,7 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS bet_sections_event ON bet_sections (event_id);
 
-  CREATE TABLE IF NOT EXISTS bet_markets (
-    id         TEXT PRIMARY KEY,
-    event_id   TEXT,
-    -- The section it is under, if any, and its place there
-    section_id TEXT REFERENCES bet_sections (id) ON DELETE SET NULL,
-    position   INTEGER NOT NULL DEFAULT 0,
-    question   TEXT NOT NULL,
-    kind       TEXT NOT NULL CHECK (kind IN ('yesno', 'choice', 'overunder')),
-    liquidity  INTEGER NOT NULL,
-    -- Over/under: the organizer's line, where over and under start out even
-    line       REAL,
-    -- Betting stops at this time; without one it stays open until it is closed by hand
-    closes_at  TEXT,
-    status     TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'settled', 'void')),
-    winner_id  TEXT,
-    -- Over/under: the number it ended on. winner_id is its outcome, or the highest one.
-    result_value INTEGER,
-    created_by TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    settled_by TEXT,
-    settled_at TEXT
-  );
+  CREATE TABLE IF NOT EXISTS bet_markets (${MARKET_COLUMNS});
   CREATE INDEX IF NOT EXISTS bet_markets_event ON bet_markets (event_id);
 
   CREATE TABLE IF NOT EXISTS bet_outcomes (
@@ -94,7 +119,9 @@ db.exec(`
     -- As the organizer set them, in hundredths
     opening_odds   INTEGER NOT NULL,
     -- Where the market maker starts; every selection adds the shares it bought
-    opening_shares REAL NOT NULL
+    opening_shares REAL NOT NULL,
+    -- 1 when it came true
+    won            INTEGER NOT NULL DEFAULT 0
   );
   CREATE INDEX IF NOT EXISTS bet_outcomes_market ON bet_outcomes (market_id, position);
 
@@ -118,20 +145,8 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS bet_slips_member ON bet_slips (username, created_at DESC);
 
-  -- A pick of one outcome, or on an over/under market a side of a line, which covers every
-  -- number above or below it
-  CREATE TABLE IF NOT EXISTS bet_selections (
-    slip_id    TEXT NOT NULL REFERENCES bet_slips (id) ON DELETE CASCADE,
-    market_id  TEXT NOT NULL REFERENCES bet_markets (id),
-    outcome_id TEXT REFERENCES bet_outcomes (id),
-    side       TEXT CHECK (side IN ('over', 'under')),
-    line       REAL,
-    odds       INTEGER NOT NULL,
-    shares     REAL NOT NULL,
-    PRIMARY KEY (slip_id, market_id)
-  );
-  CREATE INDEX IF NOT EXISTS bet_selections_market ON bet_selections (market_id);
-  CREATE INDEX IF NOT EXISTS bet_selections_outcome ON bet_selections (outcome_id);
+  CREATE TABLE IF NOT EXISTS bet_selections (${SELECTION_COLUMNS});
+  ${SELECTION_INDEXES}
 
   -- start: the coins every member begins with. allowance: the Monday coins, one row per
   -- Monday (period). stake: a slip played. payout, refund and correction: what a slip has
@@ -158,6 +173,45 @@ if (!marketColumns.some(column => column.name === 'section_id')) {
   db.exec(`
     ALTER TABLE bet_markets ADD COLUMN section_id TEXT REFERENCES bet_sections (id) ON DELETE SET NULL;
     ALTER TABLE bet_markets ADD COLUMN position INTEGER NOT NULL DEFAULT 0;
+  `)
+}
+
+// SQLite can't change a table's constraints, so the table is made again and its rows copied
+// over, with foreign keys off while the old one is dropped
+function rebuild(table: string, columns: string, indexes: string) {
+  const names = (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map(column => column.name).join(', ')
+  db.exec('PRAGMA foreign_keys = OFF')
+  try {
+    transaction(() => {
+      db.exec(`
+        CREATE TABLE ${table}_new (${columns});
+        INSERT INTO ${table}_new (${names}) SELECT ${names} FROM ${table};
+        DROP TABLE ${table};
+        ALTER TABLE ${table}_new RENAME TO ${table};
+        ${indexes}
+      `)
+      if (db.prepare('PRAGMA foreign_key_check').all().length > 0) throw new Error(`${table}: foreign keys broken by the copy`)
+    })
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON')
+  }
+}
+
+const tableSql = (table: string) =>
+  (db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?").get(table) as { sql: string }).sql
+
+// So did multi markets, and with them several picks from one market in a combination
+if (!tableSql('bet_markets').includes("'multi'")) {
+  rebuild('bet_markets', MARKET_COLUMNS, 'CREATE INDEX IF NOT EXISTS bet_markets_event ON bet_markets (event_id);')
+}
+if (tableSql('bet_selections').includes('PRIMARY KEY')) rebuild('bet_selections', SELECTION_COLUMNS, SELECTION_INDEXES)
+
+// Which outcomes came true used to be only the market's winner_id
+const outcomeColumns = db.prepare('PRAGMA table_info(bet_outcomes)').all() as { name: string }[]
+if (!outcomeColumns.some(column => column.name === 'won')) {
+  db.exec(`
+    ALTER TABLE bet_outcomes ADD COLUMN won INTEGER NOT NULL DEFAULT 0;
+    UPDATE bet_outcomes SET won = 1 WHERE id IN (SELECT winner_id FROM bet_markets WHERE status = 'settled');
   `)
 }
 
@@ -268,7 +322,9 @@ interface OutcomeRow {
   label: string
   value: number | null
   opening_odds: number
+  opening_shares: number
   shares: number
+  won: number
   staked: number
   bets: number
 }
@@ -319,7 +375,7 @@ const COVERS = `(s.outcome_id = o.id OR (s.side = 'over' AND o.value > s.line) O
 const outcomesOf = (marketId: string) =>
   db
     .prepare(
-      `SELECT o.id, o.label, o.value, o.opening_odds,
+      `SELECT o.id, o.label, o.value, o.opening_odds, o.opening_shares, o.won,
          o.opening_shares + COALESCE((SELECT SUM(s.shares) FROM bet_selections s WHERE s.market_id = o.market_id AND ${COVERS}), 0) AS shares,
          COALESCE((SELECT SUM(sl.stake) FROM bet_selections s JOIN bet_slips sl ON sl.id = s.slip_id WHERE s.outcome_id = o.id), 0) AS staked,
          (SELECT COUNT(*) FROM bet_selections s WHERE s.outcome_id = o.id) AS bets
@@ -328,6 +384,16 @@ const outcomesOf = (marketId: string) =>
        ORDER BY o.position`,
     )
     .all(marketId) as unknown as OutcomeRow[]
+
+// What each outcome costs right now, as a probability. On a multi market each is priced on
+// its own, so they add up to about as many as will come true.
+const pricesOf = (market: MarketRow, outcomes: OutcomeRow[]) =>
+  market.kind === 'multi'
+    ? outcomes.map(o => yesPrice(o.shares, o.opening_shares, market.liquidity))
+    : prices(
+        outcomes.map(o => o.shares),
+        market.liquidity,
+      )
 
 // "Over 4,5"
 const lineLabel = (side: Side, line: number) => `${side === 'over' ? 'Over' : 'Under'} ${String(line).replace('.', ',')}`
@@ -359,10 +425,7 @@ const excludedFrom = (marketId: string) =>
 
 function toMarket(market: MarketRow, viewer: Viewer) {
   const outcomes = outcomesOf(market.id)
-  const current = prices(
-    outcomes.map(o => o.shares),
-    market.liquidity,
-  )
+  const current = pricesOf(market, outcomes)
   const mine = db
     .prepare(
       `SELECT s.outcome_id, s.side, s.line, SUM(sl.stake) AS stake FROM bet_selections s JOIN bet_slips sl ON sl.id = s.slip_id
@@ -371,8 +434,8 @@ function toMarket(market: MarketRow, viewer: Viewer) {
     .all(market.id, viewer.username) as { outcome_id: string | null; side: Side | null; line: number | null; stake: number }[]
   const totals = db
     .prepare(
-      `SELECT COALESCE(SUM(sl.stake), 0) AS staked, COUNT(*) AS bets
-       FROM bet_selections s JOIN bet_slips sl ON sl.id = s.slip_id WHERE s.market_id = ?`,
+      `SELECT COALESCE(SUM(stake), 0) AS staked, COUNT(*) AS bets
+       FROM bet_slips WHERE id IN (SELECT slip_id FROM bet_selections WHERE market_id = ?)`,
     )
     .get(market.id) as { staked: number; bets: number }
 
@@ -388,6 +451,8 @@ function toMarket(market: MarketRow, viewer: Viewer) {
     closesAt: market.closes_at,
     liquidity: market.liquidity,
     winnerId: market.winner_id,
+    // Every outcome that came true: one, or on a multi market any number
+    winners: outcomes.filter(o => o.won).map(o => o.id),
     createdAt: market.created_at,
     settledAt: market.settled_at,
     // Over/under: the organizer's line, the lowest and highest numbers, and what it ended on
@@ -494,7 +559,7 @@ async function latestBets(condition: string, ...params: string[]) {
   }[]
   const members = await getMembers(rows.map(row => row.username))
   return rows.map(row => ({
-    id: `${row.slip_id}:${row.market_id}`,
+    id: `${row.slip_id}:${row.market_id}:${row.outcome_id ?? ''}`,
     member: members.get(row.username)!,
     marketId: row.market_id,
     outcomeId: row.outcome_id,
@@ -559,6 +624,8 @@ export interface MarketInput {
   kind: MarketKind
   // Not for over/under, which gets one outcome per number
   outcomes: { label: string; odds: number }[]
+  // Multi: about how many of the outcomes will come true
+  winners?: number
   // Over/under: the line where over and under start out even, the lowest and highest numbers,
   // and how far from the line the count may well end up
   line?: number
@@ -602,7 +669,8 @@ export function createMarket(viewer: Viewer, eventId: string | null, input: Mark
         return { label, value, chance }
       })
     : (() => {
-        const chances = probabilitiesFromOdds(input.outcomes.map(o => o.odds))
+        const odds = input.outcomes.map(o => o.odds)
+        const chances = input.kind === 'multi' ? severalProbabilities(odds, input.winners!) : probabilitiesFromOdds(odds)
         return input.outcomes.map((o, i) => ({ label: o.label, value: null, chance: chances[i] }))
       })()
   const id = randomUUID()
@@ -693,7 +761,8 @@ interface LegResultRow {
   side: Side | null
   line: number | null
   status: string
-  winner_id: string | null
+  // Whether the picked outcome came true
+  won: number | null
   // Over/under: the number the market ended on
   result_value: number | null
 }
@@ -705,7 +774,7 @@ function resultOf(leg: LegResultRow): SelectionResult {
     const over = leg.result_value! > leg.line!
     return (leg.side === 'over') === over ? 'won' : 'lost'
   }
-  return leg.winner_id === leg.outcome_id ? 'won' : 'lost'
+  return leg.won ? 'won' : 'lost'
 }
 
 function settleSlip(slipId: string) {
@@ -717,8 +786,8 @@ function settleSlip(slipId: string) {
   }
   const legs = db
     .prepare(
-      `SELECT s.outcome_id, s.side, s.line, s.odds, m.status, m.winner_id, m.result_value
-       FROM bet_selections s JOIN bet_markets m ON m.id = s.market_id
+      `SELECT s.outcome_id, s.side, s.line, s.odds, m.status, o.won, m.result_value
+       FROM bet_selections s JOIN bet_markets m ON m.id = s.market_id LEFT JOIN bet_outcomes o ON o.id = s.outcome_id
        WHERE s.slip_id = ?`,
     )
     .all(slipId) as unknown as (LegResultRow & { odds: number })[]
@@ -762,26 +831,32 @@ function settleSlip(slipId: string) {
   }
 }
 
-// Deciding a market also stops the betting on it, so it stays closed if it is reopened
-function decide(viewer: Viewer | null, id: string, status: 'settled' | 'void', winnerId: string | null, value: number | null = null) {
+// Deciding a market also stops the betting on it, so it stays closed if it is reopened.
+// winners are the outcomes that came true; winner_id is the one, except on a multi market.
+function decide(viewer: Viewer | null, id: string, status: 'settled' | 'void', winners: string[], value: number | null = null) {
   const time = now()
+  const multi = findMarket(id).kind === 'multi'
   db.prepare(
     `UPDATE bet_markets SET status = ?, winner_id = ?, result_value = ?, settled_by = ?, settled_at = ?,
        closes_at = CASE WHEN closes_at IS NULL OR closes_at > ? THEN ? ELSE closes_at END
      WHERE id = ?`,
-  ).run(status, winnerId, value, viewer?.username ?? null, time, time, time, id)
+  ).run(status, multi ? null : (winners[0] ?? null), value, viewer?.username ?? null, time, time, time, id)
+  db.prepare('UPDATE bet_outcomes SET won = 0 WHERE market_id = ?').run(id)
+  for (const winner of winners) db.prepare('UPDATE bet_outcomes SET won = 1 WHERE id = ?').run(winner)
   settleSlipsOn(id)
 }
 
-// What happened: the winning outcome, or for over/under the number it ended on
-export type Decision = { outcomeId: string } | { value: number }
+// What happened: the winning outcome, on a multi market every outcome that came true (maybe
+// none), or for over/under the number it ended on
+export type Decision = { outcomeId: string } | { outcomeIds: string[] } | { value: number }
 
 export function settleMarket(viewer: Viewer, id: string, decision: Decision) {
   const market = managedMarket(viewer, id)
   if (market.status !== 'open') throw bad('Spillet er allerede avgjort. Gjør om avgjørelsen først.')
 
-  let winnerId: string
+  let winners: string[]
   let value: number | null = null
+  const isOutcome = (outcomeId: string) => !!db.prepare('SELECT 1 FROM bet_outcomes WHERE id = ? AND market_id = ?').get(outcomeId, id)
   if (market.kind === 'overunder') {
     if (!('value' in decision)) throw bad('Skriv inn tallet det endte på')
     value = decision.value
@@ -790,13 +865,17 @@ export function settleMarket(viewer: Viewer, id: string, decision: Decision) {
     const outcome = db
       .prepare('SELECT id FROM bet_outcomes WHERE market_id = ? ORDER BY ABS(value - ?) LIMIT 1')
       .get(id, value) as { id: string }
-    winnerId = outcome.id
+    winners = [outcome.id]
+  } else if (market.kind === 'multi') {
+    if (!('outcomeIds' in decision)) throw bad('Velg hva som ble riktig')
+    winners = [...new Set(decision.outcomeIds)]
+    if (!winners.every(isOutcome)) throw bad('Ukjent utfall')
   } else {
     if (!('outcomeId' in decision)) throw bad('Velg hva som skjedde')
-    if (!db.prepare('SELECT 1 FROM bet_outcomes WHERE id = ? AND market_id = ?').get(decision.outcomeId, id)) throw bad('Ukjent utfall')
-    winnerId = decision.outcomeId
+    if (!isOutcome(decision.outcomeId)) throw bad('Ukjent utfall')
+    winners = [decision.outcomeId]
   }
-  transaction(() => decide(viewer, id, 'settled', winnerId, value))
+  transaction(() => decide(viewer, id, 'settled', winners, value))
   return toMarket(findMarket(id), viewer)
 }
 
@@ -804,7 +883,7 @@ export function settleMarket(viewer: Viewer, id: string, decision: Decision) {
 export function voidMarket(viewer: Viewer, id: string) {
   const market = managedMarket(viewer, id)
   if (market.status !== 'open') throw bad('Spillet er allerede avgjort. Gjør om avgjørelsen først.')
-  transaction(() => decide(viewer, id, 'void', null))
+  transaction(() => decide(viewer, id, 'void', []))
   return toMarket(findMarket(id), viewer)
 }
 
@@ -817,6 +896,7 @@ export function reopenMarket(viewer: Viewer, id: string) {
     db.prepare(
       "UPDATE bet_markets SET status = 'open', winner_id = NULL, result_value = NULL, settled_by = NULL, settled_at = NULL WHERE id = ?",
     ).run(id)
+    db.prepare('UPDATE bet_outcomes SET won = 0 WHERE market_id = ?').run(id)
     settleSlipsOn(id)
   })
   return toMarket(findMarket(id), viewer)
@@ -837,7 +917,7 @@ export function voidEventMarkets(eventId: string) {
   const markets = db.prepare("SELECT id FROM bet_markets WHERE event_id = ? AND status = 'open'").all(eventId) as {
     id: string
   }[]
-  for (const { id } of markets) decide(null, id, 'void', null)
+  for (const { id } of markets) decide(null, id, 'void', [])
   db.prepare('DELETE FROM bet_sections WHERE event_id = ?').run(eventId)
 }
 
@@ -951,11 +1031,7 @@ interface Target {
 const priceOf = (marketId: string, pick: Pick) => {
   const market = findMarket(marketId)
   const outcomes = outcomesOf(marketId)
-  const current = prices(
-    outcomes.map(o => o.shares),
-    market.liquidity,
-  )
-  return { market, price: chanceOf(outcomes, current, pick) }
+  return { market, price: chanceOf(outcomes, pricesOf(market, outcomes), pick) }
 }
 
 function targetOf(selection: SlipInput['selections'][number]): Target {
@@ -992,12 +1068,13 @@ export function placeSlips(viewer: Viewer, slips: SlipInput[]) {
         if (oddsAt(price) !== Math.round(selection.odds * 100)) {
           throw new HTTPException(409, { message: 'Oddsen har endret seg. Se over kupongen og spill igjen.' })
         }
-        return target
+        // Every outcome of a multi market is a yes/no of its own, so a combination can pick several
+        return { target, key: market.kind === 'multi' ? `${market.id}:${target.pick.outcomeId}` : market.id }
       })
-      if (new Set(legs.map(leg => leg.market_id)).size !== legs.length) {
+      if (new Set(legs.map(leg => leg.key)).size !== legs.length) {
         throw bad('En kombinasjon kan bare ha ett utfall fra hvert spill')
       }
-      return legs
+      return legs.map(leg => leg.target)
     })
 
     // Each stake moves the odds for the ones after it, so they are worked out one by one
@@ -1065,7 +1142,7 @@ function legsOf(slipIds: string[]) {
   if (slipIds.length === 0) return []
   return db
     .prepare(
-      `SELECT s.slip_id, s.market_id, s.outcome_id, s.side, s.line, s.odds, m.question, m.status, m.winner_id,
+      `SELECT s.slip_id, s.market_id, s.outcome_id, s.side, s.line, s.odds, m.question, m.status, o.won,
          m.result_value, m.event_id, e.title AS event_title, o.label
        FROM bet_selections s
        JOIN bet_markets m ON m.id = s.market_id

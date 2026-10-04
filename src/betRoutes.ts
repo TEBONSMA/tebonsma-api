@@ -83,7 +83,7 @@ function readExcluded(raw: unknown) {
 function readMarket(body: Record<string, unknown>): MarketInput {
   const question = readLine(body.question, 'Spørsmålet', MAX_QUESTION_LENGTH)
   if (!question) throw bad('Skriv hva det skal spilles på')
-  if (body.kind !== 'yesno' && body.kind !== 'choice' && body.kind !== 'overunder') throw bad('Velg type spill')
+  if (body.kind !== 'yesno' && body.kind !== 'choice' && body.kind !== 'multi' && body.kind !== 'overunder') throw bad('Velg type spill')
   const excluded = body.excluded === undefined ? [] : readExcluded(body.excluded)
   const closesAt = body.closesAt === undefined ? {} : { closesAt: readTime(body.closesAt) }
   if (body.sectionId !== undefined && body.sectionId !== null && typeof body.sectionId !== 'string') throw bad('Ugyldig seksjon')
@@ -119,6 +119,14 @@ function readMarket(body: Record<string, unknown>): MarketInput {
     if (outcomes.length < 2 || outcomes.length > MAX_OUTCOMES) throw bad(`Et spill har fra 2 til ${MAX_OUTCOMES} utfall`)
     if (outcomes.some(o => !o.label)) throw bad('Alle utfall må ha et navn')
     if (new Set(outcomes.map(o => o.label.toLowerCase())).size !== outcomes.length) throw bad('To utfall har samme navn')
+  }
+  // Multi: about how many will come true, which the opening odds are worked out from
+  if (body.kind === 'multi') {
+    const { winners } = body
+    if (typeof winners !== 'number' || !(winners >= 1) || winners >= outcomes.length) {
+      throw bad('Antallet som blir riktige må være minst 1 og færre enn utfallene')
+    }
+    return { question, kind: 'multi', outcomes, winners, ...closesAt, excluded, sectionId }
   }
   return { question, kind: body.kind, outcomes, ...closesAt, excluded, sectionId }
 }
@@ -221,10 +229,14 @@ betRoutes.patch('/bet/markets/:id', async c => {
 
 betRoutes.post('/bet/markets/:id/close', c => c.json(closeMarket(viewerOf(c), id(c))))
 
-// The winning outcome, or for over/under the number it ended on
+// The winning outcome, every outcome that came true on a multi market, or for over/under the
+// number it ended on
 betRoutes.post('/bet/markets/:id/settle', async c => {
-  const { outcomeId, value } = await readBody(c)
+  const { outcomeId, outcomeIds, value } = await readBody(c)
   if (typeof outcomeId === 'string') return c.json(settleMarket(viewerOf(c), id(c), { outcomeId }))
+  if (Array.isArray(outcomeIds) && outcomeIds.length <= MAX_OUTCOMES && outcomeIds.every(o => typeof o === 'string')) {
+    return c.json(settleMarket(viewerOf(c), id(c), { outcomeIds: outcomeIds as string[] }))
+  }
   if (typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= MAX_STAKE) {
     return c.json(settleMarket(viewerOf(c), id(c), { value }))
   }

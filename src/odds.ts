@@ -40,10 +40,26 @@ export function prices(shares: number[], liquidity: number) {
   return weights.map(w => w / total)
 }
 
+// Markets where several outcomes can come true, like who ends up on the cleaning crew. Each
+// outcome is a yes/no market of its own, where only yes is sold. The organizer says about how
+// many will come true, and the opening chances add up to that.
+const MAX_CHANCE = 0.95
+
+export const severalProbabilities = (odds: number[], winners: number) =>
+  probabilitiesFromOdds(odds).map(p => Math.min(MAX_CHANCE, p * winners))
+
+// The price of yes on one of them. Its no side stays where it opened, at liquidity × ln(1 − p),
+// since nobody buys it.
+export function yesPrice(shares: number, openingShares: number, liquidity: number) {
+  const no = liquidity * Math.log1p(-Math.exp(openingShares / liquidity))
+  return 1 / (1 + Math.exp((no - shares) / liquidity))
+}
+
 // The odds shown on the outcome: what a small stake would get
 export const oddsAt = (price: number) => clamp((100 * (1 - MARGIN)) / price)
 
 // Shares a stake buys at the given price. Each share pays one coin if the outcome happens.
+// The same holds for yes on one outcome of a market where several can come true.
 export const sharesFor = (stake: number, price: number, liquidity: number) =>
   liquidity * Math.log1p(Math.expm1(stake / liquidity) / price)
 

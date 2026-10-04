@@ -86,6 +86,14 @@ const beers = createMarket(admin, party, {
   spread: 'medium',
   excluded: [devMember.id],
 })
+// Two or three of them will end up cleaning
+const crew = createMarket(admin, party, {
+  question: 'Hvem havner på ryddelaget?',
+  kind: 'multi',
+  outcomes: ['Admin Bruker', 'Dev Bruker', 'Kari Nordmann', 'Ola Nordmann'].map(label => ({ label, odds: 400 })),
+  winners: 2.5,
+  excluded: [],
+})
 
 const quiz = await event('Quizkveld', 'Stua', 50, 3)
 const winner = createMarket(
@@ -118,6 +126,7 @@ await play(admin, 40, [burnt.outcomes[1].id])
 await play(dev, 30, [rain.outcomes[0].id])
 await play(admin, 75, [exam.outcomes[1].id])
 await playLine(admin, 60, beers.id, 'over', 6.5)
+await play(dev, 40, [crew.outcomes[2].id])
 
 // The grill evening is over: one market decided, one waiting for its result
 db.prepare('UPDATE events SET starts_at = ?, ends_at = ? WHERE post_id = ?').run(at(-26), at(-22), grill)

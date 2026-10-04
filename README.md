@@ -86,8 +86,9 @@ Members bet TEB coins, which are only for fun, on things that may happen at an e
 member starts with 1 000 coins the first time they open TebBet and gets 100 more every Monday
 (Norwegian time). Everything under `/bet` needs a login.
 
-A **market** is a question: yes/no, two to ten named outcomes, or over/under, where members
-pick a line on a count (like 4,5 beers) and bet over or under it. Markets on an event are run
+A **market** is a question: yes/no, two to ten named outcomes of which one comes true, two to
+ten of which several can (multi, like who ends up on the cleaning crew; every right pick wins),
+or over/under, where members pick a line on a count (like 4,5 beers) and bet over or under it. Markets on an event are run
 (opened, closed, decided, called off, reopened) by the event's organizer and admins; the
 organizer can turn betting off for an event (`event.betting` on the post), which hides it from
 TebBet. Admins can also open markets that aren't about an event. Whoever opens a market can
@@ -113,7 +114,7 @@ paid back out again.
 | PATCH, DELETE | `/bet/sections/:id` | Rename a section (`{ title }`), or remove it; its markets stay, under no section |
 | PUT | `/bet/events/:id/layout`, `/bet/other/layout` | Order sections and markets: `{ groups: [{ sectionId, marketIds }] }`, `sectionId` null for no section |
 | POST | `/bet/markets/:id/close` | Stop betting now |
-| POST | `/bet/markets/:id/settle` | Decide it: `{ outcomeId }`, or `{ value }` for over/under |
+| POST | `/bet/markets/:id/settle` | Decide it: `{ outcomeId }`, `{ outcomeIds }` (every outcome that came true, maybe none) for multi, or `{ value }` for over/under |
 | POST | `/bet/markets/:id/void` | Call it off and pay the stakes back |
 | POST | `/bet/markets/:id/reopen` | Take the decision back |
 | DELETE | `/bet/markets/:id` | Remove a market nobody has played on |
@@ -122,7 +123,9 @@ paid back out again.
 | GET | `/bet/ledger` | Own account statement |
 | GET | `/bet/leaderboard` | Everyone who has played, by coins in hand plus coins in play |
 
-`kind` is `yesno`, `choice` or `overunder`. An over/under market takes `line` (where over and
+`kind` is `yesno`, `choice`, `multi` or `overunder`. A multi market also takes `winners`,
+about how many of its outcomes will come true (at least 1, fewer than the outcomes, like
+`2.5`). An over/under market takes `line` (where over and
 under start out even, like `4.5`), `lowest` and `highest` (the ends of the slider, `lowest`
 0 if left out) and `spread` (`low`, `medium` or `high`) instead of `outcomes`.
 `excluded` is a list of member ids from `/bet/members`; everyone sees who is kept out.
@@ -138,6 +141,13 @@ others rise. A stake gets the average price over its own move, which is why a la
 a little less than the odds shown, and why nobody can earn coins for sure by betting on every
 side. The bank keeps 5 % of every payout. `DEFAULT_LIQUIDITY` (2 000 coins) sets how fast the
 odds move. Coins only move through the ledger table, so a balance is the sum of its rows.
+
+**Multi** markets price every outcome on its own, as a yes/no market of which only yes is
+sold. The organizer's odds are turned into probabilities that add up to `winners` (none above
+95 %), and from there each moves with what is played on it. A combination has one pick per
+market, except on a multi market, where it can pick several outcomes (all must come true) and
+their odds are multiplied like any other. Since only so many can come true, that is a little
+less than a fair price, never more.
 
 **Over/under** is the same market maker over the numbers from `lowest` to `highest`, which
 also stand for anything below and above them. Betting over 4,5 buys every number from 5 up at
@@ -253,7 +263,8 @@ To use it from the site, run `npm run dev:mock` in the Tebonsma.no repo's `teb-a
 as well, and for TebBet in the tebbet repo (it runs on port 5174; both ports are allowed).
 
 `npm run dev:mock:demo` does the same and adds three example events with TebBet markets and
-a few bets: one coming up next week (with an over/under market Dev Bruker is kept out of), one
+a few bets: one coming up next week (with an over/under market Dev Bruker is kept out of and
+a multi market), one
 in two days, and one that is over, with a decided market and one waiting for its result. There
 is also a market that isn't about an event. To call the API directly, the access token is `mock-access.<username>`:
 
