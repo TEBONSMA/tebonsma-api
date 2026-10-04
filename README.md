@@ -109,6 +109,9 @@ paid back out again.
 | POST | `/bet/events/:id/markets` | Open a market: `{ question, kind, outcomes: [{ label, odds }], closesAt, excluded }` |
 | POST | `/bet/markets` | Open a market that isn't about an event (admins), same body |
 | PATCH | `/bet/markets/:id` | Change `question`, `closesAt` or `excluded` of an undecided market |
+| POST | `/bet/events/:id/sections`, `/bet/other/sections` | Add a section heading: `{ title }` |
+| PATCH, DELETE | `/bet/sections/:id` | Rename a section (`{ title }`), or remove it; its markets stay, under no section |
+| PUT | `/bet/events/:id/layout`, `/bet/other/layout` | Order sections and markets: `{ groups: [{ sectionId, marketIds }] }`, `sectionId` null for no section |
 | POST | `/bet/markets/:id/close` | Stop betting now |
 | POST | `/bet/markets/:id/settle` | Decide it: `{ outcomeId }`, or `{ value }` for over/under |
 | POST | `/bet/markets/:id/void` | Call it off and pay the stakes back |
@@ -122,7 +125,8 @@ paid back out again.
 `kind` is `yesno`, `choice` or `overunder`. An over/under market takes `line` (where over and
 under start out even, like `4.5`), `lowest` and `highest` (the ends of the slider, `lowest`
 0 if left out) and `spread` (`low`, `medium` or `high`) instead of `outcomes`.
-`excluded` is a list of member ids from `/bet/members`. `closesAt` left out means when the
+`excluded` is a list of member ids from `/bet/members`; everyone sees who is kept out.
+`sectionId` puts a new market at the end of a section. `closesAt` left out means when the
 event starts; `null` means open until closed by hand.
 The `odds` sent with a slip are the ones the member was shown. If the odds have moved since,
 the slip is refused with 409 and the site shows the new ones.
@@ -138,9 +142,10 @@ odds move. Coins only move through the ledger table, so a balance is the sum of 
 **Over/under** is the same market maker over the numbers from `lowest` to `highest`, which
 also stand for anything below and above them. Betting over 4,5 buys every number from 5 up at
 once, so the odds on all lines hang together and can't be played against each other. The
-opening chances follow a normal curve with the organizer's line in the middle; `spread` sets
-how wide it is, as a share of the distance from `lowest` to the line (0,25, 0,5 or 0,8, plus
-1). Lines lie halfway between whole numbers, so a result is always over or under.
+opening chances follow a log-normal curve with the organizer's line in the middle, lopsided
+the way counts and waits are: twice the line is as likely as half of it. `spread` sets how wide
+it is (0,3, 0,6 or 1,0 on a log scale). Lines lie halfway between whole numbers, so a result is
+always over or under.
 
 ### Game scoreboards
 

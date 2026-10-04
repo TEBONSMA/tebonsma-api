@@ -4,7 +4,9 @@ import { requireCaller, type Env } from './auth.ts'
 import {
   closeMarket,
   createMarket,
+  createSection,
   deleteMarket,
+  deleteSection,
   ensureAccount,
   getAccount,
   getEvent,
@@ -16,10 +18,13 @@ import {
   listOther,
   listSlips,
   placeSlips,
+  renameSection,
   reopenMarket,
+  saveLayout,
   settleMarket,
   updateMarket,
   voidMarket,
+  type LayoutGroup,
   type MarketInput,
   type SlipInput,
 } from './bets.ts'
@@ -34,6 +39,8 @@ const MAX_SLIPS = 20
 const MAX_SELECTIONS = 10
 const MAX_STAKE = 1_000_000
 const MAX_EXCLUDED = 50
+const MAX_SECTION_TITLE_LENGTH = 60
+const MAX_LAYOUT_ITEMS = 500
 // Over/under: how many numbers the slider can have, and how far up it can go
 const MAX_NUMBERS = 200
 const MAX_HIGHEST = 100_000
@@ -79,6 +86,8 @@ function readMarket(body: Record<string, unknown>): MarketInput {
   if (body.kind !== 'yesno' && body.kind !== 'choice' && body.kind !== 'overunder') throw bad('Velg type spill')
   const excluded = body.excluded === undefined ? [] : readExcluded(body.excluded)
   const closesAt = body.closesAt === undefined ? {} : { closesAt: readTime(body.closesAt) }
+  if (body.sectionId !== undefined && body.sectionId !== null && typeof body.sectionId !== 'string') throw bad('Ugyldig seksjon')
+  const sectionId = (body.sectionId ?? null) as string | null
 
   // Over/under gets an outcome per number from the lowest to the highest, around the
   // organizer's line
@@ -92,7 +101,7 @@ function readMarket(body: Record<string, unknown>): MarketInput {
       throw bad('Linjen må ligge mellom to hele tall, som 4,5, mellom det laveste og det høyeste tallet')
     }
     if (typeof spread !== 'string' || !(spread in SPREADS)) throw bad('Ugyldig spredning')
-    return { question, kind: 'overunder', outcomes: [], line, lowest, highest, spread: spread as Spread, ...closesAt, excluded }
+    return { question, kind: 'overunder', outcomes: [], line, lowest, highest, spread: spread as Spread, ...closesAt, excluded, sectionId }
   }
 
   if (!Array.isArray(body.outcomes)) throw bad('Mangler utfall')
@@ -111,7 +120,27 @@ function readMarket(body: Record<string, unknown>): MarketInput {
     if (outcomes.some(o => !o.label)) throw bad('Alle utfall må ha et navn')
     if (new Set(outcomes.map(o => o.label.toLowerCase())).size !== outcomes.length) throw bad('To utfall har samme navn')
   }
-  return { question, kind: body.kind, outcomes, ...closesAt, excluded }
+  return { question, kind: body.kind, outcomes, ...closesAt, excluded, sectionId }
+}
+
+const readSectionTitle = (raw: unknown) => {
+  const title = readLine(raw, 'Seksjonen', MAX_SECTION_TITLE_LENGTH)
+  if (!title) throw bad('Seksjonen trenger et navn')
+  return title
+}
+
+// [{ sectionId, marketIds }], the groups in the order they are to be shown
+function readLayout(body: Record<string, unknown>): LayoutGroup[] {
+  const { groups } = body
+  if (!Array.isArray(groups) || groups.length > MAX_LAYOUT_ITEMS) throw bad('Ugyldig rekkefølge')
+  return groups.map(raw => {
+    const { sectionId, marketIds } = (raw ?? {}) as Record<string, unknown>
+    if (sectionId !== null && typeof sectionId !== 'string') throw bad('Ugyldig rekkefølge')
+    if (!Array.isArray(marketIds) || marketIds.length > MAX_LAYOUT_ITEMS || marketIds.some(id => typeof id !== 'string')) {
+      throw bad('Ugyldig rekkefølge')
+    }
+    return { sectionId, marketIds: marketIds as string[] }
+  })
 }
 
 function readSlips(body: Record<string, unknown>): SlipInput[] {
@@ -152,6 +181,27 @@ betRoutes.get('/bet/events/:id', async c => c.json(await getEvent(viewerOf(c), i
 betRoutes.post('/bet/events/:id/markets', async c => {
   const market = createMarket(viewerOf(c), id(c), readMarket(await readBody(c)))
   return c.json(market, 201)
+})
+
+// Sections, and the order of markets and sections, on an event or outside events (admins)
+betRoutes.post('/bet/events/:id/sections', async c =>
+  c.json(createSection(viewerOf(c), id(c), readSectionTitle((await readBody(c)).title)), 201),
+)
+betRoutes.post('/bet/other/sections', async c =>
+  c.json(createSection(viewerOf(c), null, readSectionTitle((await readBody(c)).title)), 201),
+)
+betRoutes.patch('/bet/sections/:id', async c => c.json(renameSection(viewerOf(c), id(c), readSectionTitle((await readBody(c)).title))))
+betRoutes.delete('/bet/sections/:id', c => {
+  deleteSection(viewerOf(c), id(c))
+  return c.json({ ok: true })
+})
+betRoutes.put('/bet/events/:id/layout', async c => {
+  saveLayout(viewerOf(c), id(c), readLayout(await readBody(c)))
+  return c.json({ ok: true })
+})
+betRoutes.put('/bet/other/layout', async c => {
+  saveLayout(viewerOf(c), null, readLayout(await readBody(c)))
+  return c.json({ ok: true })
 })
 
 // A market that isn't about an event; only admins

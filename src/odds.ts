@@ -65,14 +65,14 @@ export const payoutFor = (stake: number, odds: number) => Math.floor((stake * od
 // the highest, which also stand for anything below and above them. Betting over 4,5 is
 // betting on all of 5, 6, 7 and so on at once, so the odds on every line hang together.
 //
-// The opening chances follow a normal curve with the organizer's line in the middle, so over
-// and under it start out even. How wide the curve is, is the organizer's call: how far from
-// the line the count may well end up. The width grows with the distance from the lowest
-// number, since a count that can only go up from 16 is less sure than one that starts at 0.
-export const SPREADS = { low: 0.25, medium: 0.5, high: 0.8 } as const
+// The opening chances follow a log-normal curve with the organizer's line in the middle, so
+// over and under it start out even. It is lopsided the way counts and waits are: they can't go
+// below the lowest number, but can run far above the line, so twice the line is as likely as
+// half of it. It is measured from one below the lowest number, so the lowest itself is
+// possible. How wide the curve is, is the organizer's call: how far from the line the count
+// may well end up (the curve's spread on a log scale).
+export const SPREADS = { low: 0.3, medium: 0.6, high: 1.0 } as const
 export type Spread = keyof typeof SPREADS
-
-export const spreadOf = (line: number, lowest: number, spread: Spread) => SPREADS[spread] * (line - lowest) + 1
 
 // The standard normal distribution, from Abramowitz and Stegun 7.1.26 (off by at most 1.5e-7)
 export function normalCdf(z: number) {
@@ -82,8 +82,8 @@ export function normalCdf(z: number) {
 }
 
 export function countProbabilities(line: number, lowest: number, highest: number, spread: Spread) {
-  const width = spreadOf(line, lowest, spread)
-  const below = (x: number) => normalCdf((x - line) / width)
+  const middle = Math.log(line - lowest + 1)
+  const below = (x: number) => normalCdf((Math.log(x - lowest + 1) - middle) / SPREADS[spread])
   const chances: number[] = []
   for (let value = lowest; value <= highest; value++) {
     chances.push((value === highest ? 1 : below(value + 0.5)) - (value === lowest ? 0 : below(value - 0.5)))
