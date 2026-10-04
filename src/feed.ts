@@ -41,10 +41,12 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS feed_posts_created ON feed_posts (created_at DESC);
 
-  -- post_id is empty from the upload until the post is saved
+  -- A file is in a post (post_id) or on a comment (comment_id; its post is the comment's).
+  -- Both are empty from the upload until the post or comment is saved.
   CREATE TABLE IF NOT EXISTS feed_attachments (
     id         TEXT PRIMARY KEY,
     post_id    TEXT REFERENCES feed_posts (id) ON DELETE CASCADE,
+    comment_id TEXT REFERENCES feed_comments (id) ON DELETE CASCADE,
     owner      TEXT NOT NULL,
     position   INTEGER NOT NULL DEFAULT 0,
     name       TEXT NOT NULL,
@@ -55,6 +57,7 @@ db.exec(`
     created_at TEXT NOT NULL
   );
   CREATE INDEX IF NOT EXISTS feed_attachments_post ON feed_attachments (post_id);
+  CREATE INDEX IF NOT EXISTS feed_attachments_comment ON feed_attachments (comment_id);
 
   CREATE TABLE IF NOT EXISTS feed_poll_options (
     id       TEXT PRIMARY KEY,
@@ -135,14 +138,6 @@ db.exec(`
     PRIMARY KEY (announcement_id, username)
   );
 `)
-
-// Files on a comment came after the first databases were made. They have comment_id set
-// and no post_id; the post they belong to is the comment's.
-const attachmentColumns = db.prepare('PRAGMA table_info(feed_attachments)').all() as { name: string }[]
-if (!attachmentColumns.some(column => column.name === 'comment_id')) {
-  db.exec('ALTER TABLE feed_attachments ADD COLUMN comment_id TEXT REFERENCES feed_comments (id) ON DELETE CASCADE')
-}
-db.exec('CREATE INDEX IF NOT EXISTS feed_attachments_comment ON feed_attachments (comment_id)')
 
 // An upload that is neither in a post nor on a comment yet
 const UNATTACHED = 'post_id IS NULL AND comment_id IS NULL'
