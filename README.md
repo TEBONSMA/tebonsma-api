@@ -120,7 +120,8 @@ paid back out again.
 | GET | `/bet/leaderboard` | Everyone who has played, by coins in hand plus coins in play |
 
 `kind` is `yesno`, `choice` or `overunder`. An over/under market takes `line` (where over and
-under start out even, like `4.5`) and `highest` (the top of the slider) instead of `outcomes`.
+under start out even, like `4.5`), `lowest` and `highest` (the ends of the slider, `lowest`
+0 if left out) and `spread` (`low`, `medium` or `high`) instead of `outcomes`.
 `excluded` is a list of member ids from `/bet/members`. `closesAt` left out means when the
 event starts; `null` means open until closed by hand.
 The `odds` sent with a slip are the ones the member was shown. If the odds have moved since,
@@ -134,11 +135,12 @@ a little less than the odds shown, and why nobody can earn coins for sure by bet
 side. The bank keeps 5 % of every payout. `DEFAULT_LIQUIDITY` (2 000 coins) sets how fast the
 odds move. Coins only move through the ledger table, so a balance is the sum of its rows.
 
-**Over/under** is the same market maker over the numbers 0, 1, 2 … up to `highest`, which also
-stands for anything above it. Betting over 4,5 buys every number from 5 up at once, so the odds
-on all lines hang together and can't be played against each other. The opening chances follow
-a Poisson distribution with the organizer's line in the middle. Lines lie halfway between whole
-numbers, so a result is always over or under.
+**Over/under** is the same market maker over the numbers from `lowest` to `highest`, which
+also stand for anything below and above them. Betting over 4,5 buys every number from 5 up at
+once, so the odds on all lines hang together and can't be played against each other. The
+opening chances follow a normal curve with the organizer's line in the middle; `spread` sets
+how wide it is, as a share of the distance from `lowest` to the line (0,25, 0,5 or 0,8, plus
+1). Lines lie halfway between whole numbers, so a result is always over or under.
 
 ### Game scoreboards
 

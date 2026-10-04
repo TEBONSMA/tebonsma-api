@@ -10,6 +10,7 @@ import {
   DEFAULT_LIQUIDITY,
   countProbabilities,
   oddsAt,
+  type Spread,
   oddsFor,
   openingShares,
   payoutFor,
@@ -363,9 +364,10 @@ function toMarket(market: MarketRow, viewer: Viewer, manage: boolean) {
     winnerId: market.winner_id,
     createdAt: market.created_at,
     settledAt: market.settled_at,
-    // Over/under: the organizer's line, the highest number, and what it ended on
+    // Over/under: the organizer's line, the lowest and highest numbers, and what it ended on
     line: market.line,
-    highest: market.kind === 'overunder' ? outcomes.length - 1 : null,
+    lowest: market.kind === 'overunder' ? outcomes[0].value : null,
+    highest: market.kind === 'overunder' ? outcomes[outcomes.length - 1].value : null,
     result: market.result_value,
     outcomes: outcomes.map((o, i) => ({
       id: o.id,
@@ -522,9 +524,12 @@ export interface MarketInput {
   kind: MarketKind
   // Not for over/under, which gets one outcome per number
   outcomes: { label: string; odds: number }[]
-  // Over/under: the line where over and under start out even, and the highest number
+  // Over/under: the line where over and under start out even, the lowest and highest numbers,
+  // and how far from the line the count may well end up
   line?: number
+  lowest?: number
   highest?: number
+  spread?: Spread
   // Missing: when the event starts (or ends, if it is already going on)
   closesAt?: string | null
   // Members who may not play on it, by their public id
@@ -546,13 +551,17 @@ export function createMarket(viewer: Viewer, eventId: string | null, input: Mark
 
   const excluded = usernamesOf(input.excluded)
   const overUnder = input.kind === 'overunder'
-  // Over/under has an outcome per number, the highest one standing for it or more
+  // Over/under has an outcome per number; the lowest one stands for it or fewer, the highest
+  // for it or more
+  const lowest = input.lowest ?? 0
+  const highest = input.highest!
   const outcomes = overUnder
-    ? countProbabilities(input.line!, input.highest!).map((chance, value, all) => ({
-        label: value === all.length - 1 ? `${value} eller mer` : String(value),
-        value,
-        chance,
-      }))
+    ? countProbabilities(input.line!, lowest, highest, input.spread ?? 'medium').map((chance, i) => {
+        const value = lowest + i
+        const label =
+          value === highest ? `${value} eller mer` : value === lowest && lowest > 0 ? `${value} eller færre` : String(value)
+        return { label, value, chance }
+      })
     : (() => {
         const chances = probabilitiesFromOdds(input.outcomes.map(o => o.odds))
         return input.outcomes.map((o, i) => ({ label: o.label, value: null, chance: chances[i] }))
@@ -724,9 +733,10 @@ export function settleMarket(viewer: Viewer, id: string, decision: Decision) {
   if (market.kind === 'overunder') {
     if (!('value' in decision)) throw bad('Skriv inn tallet det endte på')
     value = decision.value
-    // Anything above the highest number is the highest outcome
+    // Anything above the highest number is the highest outcome, and anything below the
+    // lowest the lowest
     const outcome = db
-      .prepare('SELECT id FROM bet_outcomes WHERE market_id = ? AND value <= ? ORDER BY value DESC LIMIT 1')
+      .prepare('SELECT id FROM bet_outcomes WHERE market_id = ? ORDER BY ABS(value - ?) LIMIT 1')
       .get(id, value) as { id: string }
     winnerId = outcome.id
   } else {
@@ -816,11 +826,11 @@ function targetOf(selection: SlipInput['selections'][number]): Target {
   const market = db.prepare('SELECT kind FROM bet_markets WHERE id = ?').get(selection.marketId) as { kind: MarketKind } | undefined
   if (!market) throw bad('Et av spillene finnes ikke lenger')
   if (market.kind !== 'overunder') throw bad('Ugyldig kupong')
-  const { highest } = db.prepare('SELECT MAX(value) AS highest FROM bet_outcomes WHERE market_id = ?').get(selection.marketId) as {
-    highest: number
-  }
+  const { lowest, highest } = db
+    .prepare('SELECT MIN(value) AS lowest, MAX(value) AS highest FROM bet_outcomes WHERE market_id = ?')
+    .get(selection.marketId) as { lowest: number; highest: number }
   // Lines lie halfway between two numbers, so the result is always over or under
-  if (selection.line % 1 !== 0.5 || selection.line < 0.5 || selection.line > highest - 0.5) throw bad('Ugyldig linje')
+  if (selection.line % 1 !== 0.5 || selection.line < lowest + 0.5 || selection.line > highest - 0.5) throw bad('Ugyldig linje')
   return { market_id: selection.marketId, pick: { outcomeId: null, side: selection.side, line: selection.line } }
 }
 

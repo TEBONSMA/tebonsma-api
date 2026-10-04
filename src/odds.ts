@@ -61,41 +61,33 @@ export function combine(odds: number[]) {
 
 export const payoutFor = (stake: number, odds: number) => Math.floor((stake * odds) / 100)
 
-// Over/under: the number being counted is split into the whole numbers from 0 up to the
-// highest, which also stands for anything above it. Betting over 4,5 is betting on all of
-// 5, 6, 7 and so on at once, so the odds on every line hang together. The opening chances
-// follow a Poisson distribution, which suits things that are counted (beers, goals, minutes
-// late), with the organizer's line in the middle: over and under it start out even.
-export function countProbabilities(line: number, highest: number) {
-  const under = Math.floor(line)
-  // Chance of at most `under` for a mean of lambda, worked out in logs so a large mean
-  // can't underflow
-  const chanceUnder = (lambda: number) => {
-    let logTerm = -lambda
-    let sum = Math.exp(logTerm)
-    for (let k = 1; k <= under; k++) {
-      logTerm += Math.log(lambda) - Math.log(k)
-      sum += Math.exp(logTerm)
-    }
-    return sum
-  }
-  // The chance of under falls as the mean grows; find the mean that makes it one half
-  let low = 1e-6
-  let high = 4 * highest + 10
-  for (let i = 0; i < 100; i++) {
-    const mid = (low + high) / 2
-    if (chanceUnder(mid) > 0.5) low = mid
-    else high = mid
-  }
-  const lambda = (low + high) / 2
+// Over/under: the number being counted is split into the whole numbers from the lowest to
+// the highest, which also stand for anything below and above them. Betting over 4,5 is
+// betting on all of 5, 6, 7 and so on at once, so the odds on every line hang together.
+//
+// The opening chances follow a normal curve with the organizer's line in the middle, so over
+// and under it start out even. How wide the curve is, is the organizer's call: how far from
+// the line the count may well end up. The width grows with the distance from the lowest
+// number, since a count that can only go up from 16 is less sure than one that starts at 0.
+export const SPREADS = { low: 0.25, medium: 0.5, high: 0.8 } as const
+export type Spread = keyof typeof SPREADS
 
+export const spreadOf = (line: number, lowest: number, spread: Spread) => SPREADS[spread] * (line - lowest) + 1
+
+// The standard normal distribution, from Abramowitz and Stegun 7.1.26 (off by at most 1.5e-7)
+export function normalCdf(z: number) {
+  const t = 1 / (1 + (0.3275911 * Math.abs(z)) / Math.SQRT2)
+  const tail = ((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-(z * z) / 2)
+  return z >= 0 ? 1 - tail / 2 : tail / 2
+}
+
+export function countProbabilities(line: number, lowest: number, highest: number, spread: Spread) {
+  const width = spreadOf(line, lowest, spread)
+  const below = (x: number) => normalCdf((x - line) / width)
   const chances: number[] = []
-  let logTerm = -lambda
-  for (let k = 0; k < highest; k++) {
-    if (k > 0) logTerm += Math.log(lambda) - Math.log(k)
-    chances.push(Math.exp(logTerm))
+  for (let value = lowest; value <= highest; value++) {
+    chances.push((value === highest ? 1 : below(value + 0.5)) - (value === lowest ? 0 : below(value - 0.5)))
   }
-  chances.push(Math.max(0, 1 - chances.reduce((sum, p) => sum + p, 0)))
   // No number is ruled out entirely, or its shares would be minus infinity
   const floored = chances.map(p => Math.max(p, 1e-6))
   const total = floored.reduce((sum, p) => sum + p, 0)

@@ -23,7 +23,7 @@ import {
   type MarketInput,
   type SlipInput,
 } from './bets.ts'
-import { MAX_ODDS, MIN_ODDS } from './odds.ts'
+import { MAX_ODDS, MIN_ODDS, SPREADS, type Spread } from './odds.ts'
 import { bad, readBody, readText, viewerOf } from './feedRoutes.ts'
 
 const MAX_QUESTION_LENGTH = 140
@@ -34,8 +34,9 @@ const MAX_SLIPS = 20
 const MAX_SELECTIONS = 10
 const MAX_STAKE = 1_000_000
 const MAX_EXCLUDED = 50
-// Over/under: the highest number the slider goes to
-const MAX_HIGHEST = 200
+// Over/under: how many numbers the slider can have, and how far up it can go
+const MAX_NUMBERS = 200
+const MAX_HIGHEST = 100_000
 
 // TebBet, the members' betting site at bet.tebonsma.no. Everything needs a login.
 export const betRoutes = new Hono<Env>()
@@ -79,16 +80,19 @@ function readMarket(body: Record<string, unknown>): MarketInput {
   const excluded = body.excluded === undefined ? [] : readExcluded(body.excluded)
   const closesAt = body.closesAt === undefined ? {} : { closesAt: readTime(body.closesAt) }
 
-  // Over/under gets an outcome per number from 0 to the highest, around the organizer's line
+  // Over/under gets an outcome per number from the lowest to the highest, around the
+  // organizer's line
   if (body.kind === 'overunder') {
-    const { line, highest } = body
-    if (typeof highest !== 'number' || !Number.isInteger(highest) || highest < 2 || highest > MAX_HIGHEST) {
-      throw bad(`Høyeste tall må være et helt tall fra 2 til ${MAX_HIGHEST}`)
+    const { line, lowest = 0, highest, spread = 'medium' } = body
+    const whole = (n: unknown): n is number => typeof n === 'number' && Number.isInteger(n) && n >= 0 && n <= MAX_HIGHEST
+    if (!whole(lowest) || !whole(highest) || highest - lowest < 2 || highest - lowest > MAX_NUMBERS) {
+      throw bad(`Laveste og høyeste tall må være hele tall, med fra 2 til ${MAX_NUMBERS} mellom seg`)
     }
-    if (typeof line !== 'number' || line % 1 !== 0.5 || line < 0.5 || line > highest - 0.5) {
-      throw bad('Linjen må ligge mellom to hele tall, som 4,5, og under det høyeste tallet')
+    if (typeof line !== 'number' || line % 1 !== 0.5 || line < lowest + 0.5 || line > highest - 0.5) {
+      throw bad('Linjen må ligge mellom to hele tall, som 4,5, mellom det laveste og det høyeste tallet')
     }
-    return { question, kind: 'overunder', outcomes: [], line, highest, ...closesAt, excluded }
+    if (typeof spread !== 'string' || !(spread in SPREADS)) throw bad('Ugyldig spredning')
+    return { question, kind: 'overunder', outcomes: [], line, lowest, highest, spread: spread as Spread, ...closesAt, excluded }
   }
 
   if (!Array.isArray(body.outcomes)) throw bad('Mangler utfall')

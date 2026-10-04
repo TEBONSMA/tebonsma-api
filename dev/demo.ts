@@ -83,6 +83,7 @@ const beers = createMarket(admin, party, {
   outcomes: [],
   line: 6.5,
   highest: 20,
+  spread: 'medium',
   excluded: [devMember.id],
 })
 
