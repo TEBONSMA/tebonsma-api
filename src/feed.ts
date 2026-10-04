@@ -267,15 +267,17 @@ const MAX_EVENTS_LISTED = 200
 // Events in the order they take place, the ones without a date last. With a period, only
 // the events that overlap it.
 export async function listEvents(viewer: Viewer | null, from: string | null, to: string | null) {
+  // Read the other way round, so that past the limit it is the oldest events that are left
+  // out and never the coming ones, then turned the right way
   const rows = db
     .prepare(
       `${POST_SELECT} JOIN events e ON e.post_id = p.id
        WHERE (? = 1 OR p.visibility = 'public')
          AND (? IS NULL OR e.ends_at >= ?) AND (? IS NULL OR e.starts_at <= ?)
-       ORDER BY e.starts_at IS NULL, e.starts_at LIMIT ?`,
+       ORDER BY e.starts_at IS NULL DESC, e.starts_at DESC, p.created_at DESC LIMIT ?`,
     )
     .all(viewer ? 1 : 0, from, from, to, to, MAX_EVENTS_LISTED) as unknown as PostRow[]
-  return toPosts(rows, viewer)
+  return toPosts(rows.reverse(), viewer)
 }
 
 export interface PostInput {
