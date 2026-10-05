@@ -1,7 +1,7 @@
 import { HTTPException } from 'hono/http-exception'
 import { simpleParser, type AddressObject, type ParsedMail } from 'mailparser'
 import { getProfile } from '../lldap.ts'
-import { backend, type Account, type Address, type FolderInfo, type Head } from './backend.ts'
+import { backend, type Account, type Address, type FolderInfo, type Head, type SearchQuery } from './backend.ts'
 import { sanitizeIncoming, textToHtml } from './html.ts'
 
 // --- Whose mailbox ---
@@ -154,6 +154,7 @@ export function groupIds(mailbox: Mailbox, ids: string[]) {
     group.uids.push(ref.uid)
     groups.set(folder.path, group)
   }
+  if (ids.length > 0 && groups.size === 0) throw new HTTPException(404, { message: 'Mailen finnes ikke lenger' })
   return [...groups.values()]
 }
 
@@ -202,30 +203,114 @@ export async function headsInOrder(account: Account, path: string, uids: number[
   return heads.sort((a, b) => position.get(a.uid)! - position.get(b.uid)!)
 }
 
+export type Sort = 'new' | 'old' | 'sender' | 'subject' | 'size'
+export const SORTS: Sort[] = ['new', 'old', 'sender', 'subject', 'size']
+
+// What to pick out of the folders: every field narrows the list further
+export interface Filter {
+  unread?: boolean
+  flagged?: boolean
+  text?: string
+  from?: string
+  to?: string
+  subject?: string
+  attachment?: boolean
+  // A label's keyword
+  keyword?: string
+  since?: Date
+  before?: Date
+}
+
 export interface ListOptions {
+  // A folder key, or one of the lists that cut across folders: all, favorites, unread
   folder: string
   offset: number
   limit: number
-  unread: boolean
-  sort: 'new' | 'old'
+  sort: Sort
+  filter: Filter
+}
+
+export const VIRTUAL = ['all', 'favorites', 'unread'] as const
+export const isVirtual = (key: string) => (VIRTUAL as readonly string[]).includes(key)
+
+// Sorting by anything but date means looking at this many of the newest mails and sorting them here
+const WINDOW = 1000
+// Mails in the bin and in junk only show up where they are
+const HIDDEN_FROM_LISTS: Role[] = ['trash', 'junk']
+const NOT_UNREAD_LISTS: Role[] = [...HIDDEN_FROM_LISTS, 'sent', 'drafts', 'scheduled']
+
+function toQuery(filter: Filter): SearchQuery {
+  return {
+    unseen: filter.unread || undefined,
+    flagged: filter.flagged || undefined,
+    text: filter.text,
+    from: filter.from,
+    to: filter.to,
+    subject: filter.subject,
+    hasAttachment: filter.attachment || undefined,
+    keyword: filter.keyword,
+    since: filter.since,
+    before: filter.before,
+  }
+}
+
+function foldersFor(mailbox: Mailbox, key: string) {
+  const all = [...mailbox.paths.values(), ...mailbox.own]
+  const without = (roles: Role[]) => all.filter(f => !roles.some(role => mailbox.paths.get(role) === f))
+  if (key === 'all' || key === 'favorites') return without(HIDDEN_FROM_LISTS)
+  if (key === 'unread') return without(NOT_UNREAD_LISTS)
+  const folder = findFolder(mailbox, key)
+  if (!folder) {
+    // A role the server has no folder for yet is an empty folder
+    if (isRole(key)) return []
+    throw new HTTPException(404, { message: 'Mappen finnes ikke' })
+  }
+  return [folder]
+}
+
+const plain = (subject: string) => subject.replace(/^((re|fwd?|sv|vs|vl|fw)(\[\d+\])?:\s*)+/i, '').trim().toLowerCase()
+const who = (head: Head) => (head.from?.name || head.from?.address || '').toLowerCase()
+
+const COMPARE: Record<Sort, (a: Head, b: Head) => number> = {
+  new: (a, b) => b.date.localeCompare(a.date),
+  old: (a, b) => a.date.localeCompare(b.date),
+  sender: (a, b) => who(a).localeCompare(who(b), 'nb') || b.date.localeCompare(a.date),
+  subject: (a, b) => plain(a.subject).localeCompare(plain(b.subject), 'nb') || b.date.localeCompare(a.date),
+  size: (a, b) => b.size - a.size,
 }
 
 export async function listMessages(account: Account, options: ListOptions) {
   const mailbox = await openMailbox(account)
-  // A role the server has no folder for yet is an empty folder
-  const folder = findFolder(mailbox, options.folder)
-  if (!folder) {
-    if (isRole(options.folder)) return { messages: [] as MessageSummary[], nextOffset: null, total: 0 }
-    throw new HTTPException(404, { message: 'Mappen finnes ikke' })
+  const folders = foldersFor(mailbox, options.folder)
+  const filter: Filter = { ...options.filter }
+  if (options.folder === 'favorites') filter.flagged = true
+  if (options.folder === 'unread') filter.unread = true
+  const query = toQuery(filter)
+
+  // One folder, by date: the server's own order is the answer, so only the page is fetched
+  if (folders.length === 1 && (options.sort === 'new' || options.sort === 'old')) {
+    const uids = await backend().search(account, folders[0].path, query)
+    const ordered = options.sort === 'old' ? uids : [...uids].reverse()
+    const page = ordered.slice(options.offset, options.offset + options.limit)
+    const heads = await headsInOrder(account, folders[0].path, page)
+    const end = options.offset + page.length
+    return {
+      messages: heads.map(head => summarize(mailbox, head)),
+      nextOffset: end < ordered.length ? end : null,
+      total: ordered.length,
+    }
   }
 
-  const uids = await backend().search(account, folder.path, options.unread ? { unseen: true } : {})
-  const ordered = options.sort === 'old' ? uids : [...uids].reverse()
+  const found: Head[] = []
+  for (const folder of folders) {
+    const uids = (await backend().search(account, folder.path, query)).slice(-WINDOW)
+    found.push(...(await backend().heads(account, folder.path, uids)))
+  }
+  const ordered = found.sort(COMPARE[options.sort]).slice(0, WINDOW)
   const page = ordered.slice(options.offset, options.offset + options.limit)
-  const heads = await headsInOrder(account, folder.path, page)
   const end = options.offset + page.length
   return {
-    messages: heads.map(head => summarize(mailbox, head)),
+    messages: page.map(head => summarize(mailbox, head)),
     nextOffset: end < ordered.length ? end : null,
     total: ordered.length,
   }
