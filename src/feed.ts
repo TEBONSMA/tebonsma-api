@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { HTTPException } from 'hono/http-exception'
 import { db, transaction } from './db.ts'
 import { voidEventMarkets } from './bets.ts'
-import { eventOf, isEvent, saveEvent, type EventInput } from './events.ts'
+import { eventOf, isEvent, isOrganizer, organizersOf, saveEvent, type EventInput } from './events.ts'
 import { getMembers, type PublicMember } from './members.ts'
 
 // Who is looking. Visitors who aren't logged in are null and only see public posts.
@@ -215,7 +215,8 @@ const toAttachment = (a: AttachmentRow) => ({
 })
 
 async function toPosts(rows: PostRow[], viewer: Viewer | null) {
-  const members = await getMembers(rows.map(row => row.author))
+  const organizers = new Map(rows.map(row => [row.id, organizersOf(row.id)]))
+  const members = await getMembers([...rows.map(row => row.author), ...[...organizers.values()].flat()])
   const has = (table: string, column: string, postId: string) =>
     !!viewer && !!db.prepare(`SELECT 1 FROM ${table} WHERE post_id = ? AND ${column} = ?`).get(postId, viewer.username)
 
@@ -233,11 +234,18 @@ async function toPosts(rows: PostRow[], viewer: Viewer | null) {
       pinned: row.pinned_at !== null,
       attachments: attachments.map(toAttachment),
       poll: pollOf(row.id, viewer),
-      event: eventOf(row.id, viewer, row.visibility),
+      event: eventOf(
+        row.id,
+        viewer,
+        row.visibility,
+        organizers.get(row.id)!.map(username => members.get(username)!),
+      ),
       likeCount: row.like_count,
       liked: has('feed_post_likes', 'username', row.id),
       commentCount: row.comment_count,
       mine: viewer?.username === row.author,
+      // The author, and for an event the members it was shared with
+      canEdit: !!viewer && (viewer.username === row.author || organizers.get(row.id)!.includes(viewer.username)),
       reported: has('feed_reports', 'reporter', row.id),
     }
   })
@@ -315,21 +323,28 @@ export interface PostInput {
 }
 
 // Puts the listed uploads on the post in the given order and drops the ones left out.
-// Only the member's own uploads count, and never ones that belong to another post.
-function setAttachments(postId: string, owner: string, ids: string[]) {
+// Only uploads by the given members count (whoever is saving, and the post's author whose
+// files are already there), and never ones that belong to another post.
+function setAttachments(postId: string, owners: string[], ids: string[]) {
+  const ownerIn = owners.map(() => '?').join(', ')
   ids.forEach((id, position) => {
     const { changes } = db
       .prepare(
-        'UPDATE feed_attachments SET post_id = ?, position = ? WHERE id = ? AND owner = ? AND comment_id IS NULL AND (post_id IS NULL OR post_id = ?)',
+        `UPDATE feed_attachments SET post_id = ?, position = ? WHERE id = ? AND owner IN (${ownerIn}) AND comment_id IS NULL AND (post_id IS NULL OR post_id = ?)`,
       )
-      .run(postId, position, id, owner, postId)
+      .run(postId, position, id, ...owners, postId)
     if (changes === 0) throw new HTTPException(400, { message: 'Et vedlegg finnes ikke lenger. Last det opp på nytt.' })
   })
   const kept = ids.map(() => '?').join(', ')
   db.prepare(`DELETE FROM feed_attachments WHERE post_id = ? AND id NOT IN (${kept})`).run(postId, ...ids)
 }
 
-export function createPost(viewer: Viewer, input: PostInput, pollOptions: string[]) {
+// The author is an organizer already
+const withoutAuthor = (input: PostInput, author: string): PostInput =>
+  input.event?.organizers ? { ...input, event: { ...input.event, organizers: input.event.organizers.filter(u => u !== author) } } : input
+
+export function createPost(viewer: Viewer, rawInput: PostInput, pollOptions: string[]) {
+  const input = withoutAuthor(rawInput, viewer.username)
   const id = randomUUID()
   transaction(() => {
     db.prepare('INSERT INTO feed_posts (id, author, body, visibility, created_at) VALUES (?, ?, ?, ?, ?)').run(
@@ -339,7 +354,7 @@ export function createPost(viewer: Viewer, input: PostInput, pollOptions: string
       input.visibility,
       now(),
     )
-    setAttachments(id, viewer.username, input.attachmentIds)
+    setAttachments(id, [viewer.username], input.attachmentIds)
     pollOptions.forEach((text, position) => {
       db.prepare('INSERT INTO feed_poll_options (id, post_id, position, text) VALUES (?, ?, ?, ?)').run(randomUUID(), id, position, text)
     })
@@ -351,15 +366,25 @@ export function createPost(viewer: Viewer, input: PostInput, pollOptions: string
   return getPost(viewer, id)
 }
 
-export function updatePost(viewer: Viewer, id: string, input: PostInput) {
+const sameMembers = (a: string[], b: string[]) => a.length === b.length && a.every(username => b.includes(username))
+
+export function updatePost(viewer: Viewer, id: string, rawInput: PostInput) {
   const post = findPost(viewer, id)
-  if (post.author !== viewer.username) throw new HTTPException(403, { message: 'Du kan bare redigere egne innlegg' })
+  const input = withoutAuthor(rawInput, post.author)
+  const isAuthor = post.author === viewer.username
+  if (!isAuthor && !isOrganizer(id, viewer.username)) {
+    throw new HTTPException(403, { message: 'Du kan bare redigere egne innlegg og arrangementer du er arrangør for' })
+  }
   // An event stays an event, and a post a post
   if (isEvent(id) !== (input.event !== null)) throw new HTTPException(400, { message: 'Ugyldig forespørsel' })
+  // Only the one who made the event picks who else organizes it
+  if (!isAuthor && input.event?.organizers && !sameMembers(input.event.organizers, organizersOf(id))) {
+    throw new HTTPException(403, { message: 'Bare den som opprettet arrangementet kan endre arrangørene' })
+  }
 
   transaction(() => {
     db.prepare('UPDATE feed_posts SET body = ?, visibility = ?, edited_at = ? WHERE id = ?').run(input.body, input.visibility, now(), id)
-    setAttachments(id, post.author, input.attachmentIds)
+    setAttachments(id, [post.author, viewer.username], input.attachmentIds)
     if (input.event) saveEvent(id, input.event)
   })
   return getPost(viewer, id)
@@ -545,8 +570,8 @@ export async function addComment(viewer: Viewer, postId: string, body: string, p
       if (changes === 0) throw new HTTPException(400, { message: 'Et vedlegg finnes ikke lenger. Last det opp på nytt.' })
     })
 
-    // The post's author hears about every comment, and whoever is answered about the reply
-    const recipients = new Map([[post.author, 'comment']])
+    // The post's author, and the organizers of an event, hear about every comment, and whoever is answered about the reply
+    const recipients = new Map([post.author, ...organizersOf(postId)].map(username => [username, 'comment']))
     if (parent) recipients.set(parent.author, 'reply')
     recipients.delete(viewer.username)
     for (const [recipient, kind] of recipients) {
@@ -684,7 +709,9 @@ function announce(kind: AnnouncementKind, actor: string, postId: string, body: s
 export function sendAnnouncement(viewer: Viewer, id: string, body: string) {
   const post = findPost(viewer, id)
   if (!isEvent(id)) throw new HTTPException(404, { message: 'Arrangementet finnes ikke' })
-  if (post.author !== viewer.username) throw new HTTPException(403, { message: 'Bare den som opprettet arrangementet kan sende kunngjøringer' })
+  if (post.author !== viewer.username && !isOrganizer(id, viewer.username)) {
+    throw new HTTPException(403, { message: 'Bare arrangørene kan sende kunngjøringer' })
+  }
   announce('announcement', viewer.username, id, body)
 }
 

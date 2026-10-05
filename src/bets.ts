@@ -463,7 +463,10 @@ function findGroup(id: string) {
   return row
 }
 
-const canManage = (viewer: Viewer, event: EventRow) => viewer.admin || event.author === viewer.username
+const canManage = (viewer: Viewer, event: EventRow) =>
+  viewer.admin ||
+  event.author === viewer.username ||
+  !!db.prepare('SELECT 1 FROM event_organizers WHERE post_id = ? AND username = ?').get(event.id, viewer.username)
 
 const assertAdmin = (viewer: Viewer) => {
   if (!viewer.admin) throw new HTTPException(403, { message: 'Bare administratorer kan styre spill utenom arrangementer' })
