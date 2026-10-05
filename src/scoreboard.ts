@@ -134,3 +134,23 @@ export function getLeaderboard(game: string, username: string) {
     you: mine && ahead ? { score: mine.score, date: mine.achieved_at, rank: ahead.n + 1 } : null,
   }
 }
+
+// A member's best score in every game, and the place it gives among everyone who has played.
+// Games they haven't played have no record.
+export function getRecords(username: string) {
+  return Object.keys(GAMES).map(game => {
+    const mine = db.prepare('SELECT score, achieved_at FROM game_scores WHERE game = ? AND username = ?').get(game, username) as
+      | { score: number; achieved_at: string }
+      | undefined
+    const players = (db.prepare('SELECT COUNT(*) AS n FROM game_scores WHERE game = ?').get(game) as { n: number }).n
+    if (!mine) return { game, players, record: null }
+
+    const ahead = db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM game_scores
+         WHERE game = ? AND (score > ? OR (score = ? AND achieved_at < ?))`,
+      )
+      .get(game, mine.score, mine.score, mine.achieved_at) as { n: number }
+    return { game, players, record: { score: mine.score, date: mine.achieved_at, rank: ahead.n + 1 } }
+  })
+}
