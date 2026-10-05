@@ -7,6 +7,8 @@ import { HTTPException } from 'hono/http-exception'
 export interface Account {
   email: string
   token: string
+  // How the member signs their mails, from their profile
+  name?: string
 }
 
 export interface Address {

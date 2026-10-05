@@ -579,7 +579,7 @@ export function getCommentLikers(viewer: Viewer, id: string) {
 // --- Attachments ---
 
 // Only these are shown as pictures. Everything else, SVG included, is a download.
-function sniffImage(bytes: Uint8Array) {
+export function sniffImage(bytes: Uint8Array) {
   const starts = (...signature: number[]) => signature.every((byte, i) => bytes[i] === byte)
   if (starts(0xff, 0xd8, 0xff)) return 'image/jpeg'
   if (starts(0x89, 0x50, 0x4e, 0x47)) return 'image/png'

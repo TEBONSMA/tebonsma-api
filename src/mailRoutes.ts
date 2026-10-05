@@ -1,4 +1,5 @@
 import { Hono, type Context } from 'hono'
+import { HTTPException } from 'hono/http-exception'
 import { bodyLimit } from 'hono/body-limit'
 import { requireCaller, type Env } from './auth.ts'
 import { bad, readBody, readText, UPLOAD_HEADERS } from './feedRoutes.ts'
@@ -15,6 +16,10 @@ import {
 } from './mail/actions.ts'
 import { getSettings, saveSettings } from './mail/settings.ts'
 import { openConversation } from './mail/threads.ts'
+import { composeFrom, deleteDraft, readCompose, saveDraft, type ComposeMode } from './mail/compose.ts'
+import { cancelSend, sendMail } from './mail/outbox.ts'
+import { deleteUploads, MAX_UPLOAD_BYTES, readUpload, saveUpload } from './mail/uploads.ts'
+import { listMembers } from './members.ts'
 import { createLabel, deleteLabel, listLabels, updateLabel } from './mail/labels.ts'
 import {
   accountFor,
@@ -42,6 +47,9 @@ mailRoutes.use('/mail/folders', jsonLimit)
 mailRoutes.use('/mail/messages/*', jsonLimit)
 mailRoutes.use('/mail/labels/*', jsonLimit)
 mailRoutes.use('/mail/labels', jsonLimit)
+mailRoutes.use('/mail/drafts/*', bodyLimit({ maxSize: 2 * 1024 * 1024 }))
+mailRoutes.use('/mail/send', bodyLimit({ maxSize: 2 * 1024 * 1024 }))
+mailRoutes.use('/mail/outbox/*', jsonLimit)
 
 const ownerOf = (c: Context<Env>) => c.get('caller').username
 
@@ -181,3 +189,71 @@ mailRoutes.get('/mail/messages/:id/attachments/:n', requireCaller, async c => {
     'Cache-Control': 'private, no-store',
   })
 })
+
+// --- Writing ---
+
+// A mail that is being written can have files attached; they are uploaded as they are chosen
+mailRoutes.post(
+  '/mail/uploads',
+  requireCaller,
+  // Room for the multipart wrapping around the file itself
+  bodyLimit({
+    maxSize: MAX_UPLOAD_BYTES + 64 * 1024,
+    onError: () => {
+      throw new HTTPException(413, { message: 'Filen er for stor' })
+    },
+  }),
+  async c => {
+    const form = await c.req.parseBody().catch(() => null)
+    const file = form?.file
+    if (!(file instanceof File)) throw bad('Mangler fil')
+    if (file.size === 0) throw bad('Filen er tom')
+    if (file.size > MAX_UPLOAD_BYTES) throw new HTTPException(413, { message: 'Filen er for stor' })
+    const bytes = new Uint8Array(await file.arrayBuffer())
+    return c.json(saveUpload(ownerOf(c), { name: file.name, type: file.type, bytes }), 201)
+  },
+)
+
+mailRoutes.get('/mail/uploads/:id', requireCaller, c => {
+  const file = readUpload(ownerOf(c), c.req.param('id'))
+  return c.body(new Uint8Array(file.content), 200, {
+    ...UPLOAD_HEADERS,
+    'Content-Type': file.mime,
+    'Content-Disposition': `${file.isImage ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(file.name)}`,
+    'Cache-Control': 'private, max-age=3600',
+  })
+})
+
+mailRoutes.delete('/mail/uploads/:id', requireCaller, c => {
+  deleteUploads(ownerOf(c), [c.req.param('id')])
+  return c.json({ ok: true })
+})
+
+// What a new mail starts with when it answers, forwards or continues another
+mailRoutes.get('/mail/messages/:id/compose', requireCaller, async c => {
+  const mode = c.req.query('mode')
+  if (mode !== 'reply' && mode !== 'replyAll' && mode !== 'forward' && mode !== 'draft') throw bad('Ukjent type')
+  return c.json(await composeFrom(await accountOf(c), ownerOf(c), c.req.param('id'), mode as ComposeMode))
+})
+
+// Drafts are saved as they are written. The id is made by the site, and a new save replaces the old.
+mailRoutes.put('/mail/drafts/:id', requireCaller, async c => {
+  const body = await readBody(c)
+  const input = await readCompose({ ...body, draftId: c.req.param('id') }, { forSending: false })
+  return c.json({ draftId: await saveDraft(await accountOf(c), ownerOf(c), input) })
+})
+
+mailRoutes.delete('/mail/drafts/:id', requireCaller, async c => {
+  await deleteDraft(await accountOf(c), c.req.param('id'))
+  return c.json({ ok: true })
+})
+
+mailRoutes.post('/mail/send', requireCaller, async c => {
+  const input = await readCompose(await readBody(c), { forSending: true })
+  return c.json(await sendMail(await accountOf(c), ownerOf(c), input))
+})
+
+mailRoutes.delete('/mail/outbox/:id', requireCaller, c => c.json(cancelSend(ownerOf(c), c.req.param('id'))))
+
+// Who can be chosen as a recipient or to share with. No usernames or addresses: the id is the random one used in the feed.
+mailRoutes.get('/members', requireCaller, async c => c.json(await listMembers(ownerOf(c))))

@@ -9,17 +9,17 @@ import { sanitizeIncoming, textToHtml } from './html.ts'
 
 // The address in LLDAP is the mail login. It rarely changes, so it is asked for now and then.
 const ADDRESS_TTL_MS = 10 * 60 * 1000
-const addresses = new Map<string, { email: string; until: number }>()
+const addresses = new Map<string, { email: string; name: string; until: number }>()
 
 export async function accountFor(username: string, token: string): Promise<Account> {
   let known = addresses.get(username)
   if (!known || known.until < Date.now()) {
-    const { email } = await getProfile(username)
-    known = { email, until: Date.now() + ADDRESS_TTL_MS }
+    const { email, displayName } = await getProfile(username)
+    known = { email, name: displayName, until: Date.now() + ADDRESS_TTL_MS }
     addresses.set(username, known)
   }
   if (!known.email) throw new HTTPException(409, { message: 'Kontoen din har ingen e-postadresse' })
-  return { email: known.email, token }
+  return { email: known.email, token, name: known.name }
 }
 
 // --- Folders ---
@@ -406,7 +406,7 @@ const isListed = (attachment: ParsedMail['attachments'][number]) =>
 
 export const safeMime = (type: string) => (/^[\w.+-]+\/[\w.+-]+$/.test(type) ? type : 'application/octet-stream')
 
-async function load(account: Account, id: string) {
+export async function load(account: Account, id: string) {
   const ref = decodeId(id)
   const mailbox = await openMailbox(account)
   const folder = [...mailbox.paths.values(), ...mailbox.own].find(f => f.path === ref.path)

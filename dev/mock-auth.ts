@@ -219,6 +219,22 @@ export function startMockAuth(port: number) {
       }
     }
     const operation = query.match(/^\s*(?:query|mutation)\s+(\w+)/)?.[1]
+    if (operation === 'Users') {
+      return c.json({
+        data: {
+          users: [...users].map(([id, user]) => ({
+            id,
+            email: user.email,
+            displayName: user.displayName,
+            firstName: user.firstName,
+            lastName: user.lastName,
+            avatar: user.avatar,
+            creationDate: user.createdAt,
+            groups: user.groups.map(displayName => ({ displayName })),
+          })),
+        },
+      })
+    }
     if (operation !== 'User' && operation !== 'Update') {
       return c.json({
         errors: [{ message: `The mock LLDAP does not know the operation '${operation ?? 'unnamed'}'. Add it to dev/mock-auth.ts.` }],
