@@ -7,6 +7,7 @@ import { requireCaller, type Env } from './auth.ts'
 import { config } from './config.ts'
 import { eventRoutes } from './eventRoutes.ts'
 import { feedRoutes } from './feedRoutes.ts'
+import { mailRoutes } from './mailRoutes.ts'
 import { getProfile as readProfile, setAvatar, updateProfile, type ProfileChanges } from './lldap.ts'
 import { rememberProfile } from './members.ts'
 import { getLeaderboard, isGame, ScoreRejected, startRun, submitScore } from './scoreboard.ts'
@@ -125,6 +126,7 @@ app.get('/flappy/leaderboard', requireCaller, c => gameLeaderboard(c, 'flappy-te
 
 app.route('/', feedRoutes)
 app.route('/', eventRoutes)
+app.route('/', mailRoutes)
 
 app.onError((err, c) => {
   if (err instanceof HTTPException) return c.json({ error: err.message }, err.status)

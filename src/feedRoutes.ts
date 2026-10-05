@@ -246,7 +246,7 @@ feedRoutes.post(
 )
 
 // Uploaded files are never run or rendered as pages, whatever they contain
-const UPLOAD_HEADERS = {
+export const UPLOAD_HEADERS = {
   'X-Content-Type-Options': 'nosniff',
   'Content-Security-Policy': "default-src 'none'; sandbox",
 }

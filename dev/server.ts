@@ -1,4 +1,6 @@
 import { rmSync } from 'node:fs'
+import { useBackend } from '../src/mail/backend.ts'
+import { mockMail } from './mock-mail.ts'
 import { startMockAuth } from './mock-auth.ts'
 
 // Local development entry point (npm run dev:mock): starts the mock login provider and
@@ -23,5 +25,8 @@ if (!process.env.DATA_DIR) {
   process.env.DATA_DIR = './data/mock'
   rmSync(process.env.DATA_DIR, { recursive: true, force: true })
 }
+
+// Mail lives in memory too, so no mail server is needed
+useBackend(mockMail)
 
 await import('../src/server.ts')

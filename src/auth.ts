@@ -4,7 +4,8 @@ import { HTTPException } from 'hono/http-exception'
 import { verifyAccessToken, type Caller } from './authelia.ts'
 import { config } from './config.ts'
 
-export type Env = { Variables: { caller: Caller } }
+// The token is kept so the mailbox can be opened as the member (see src/mail)
+export type Env = { Variables: { caller: Caller; token: string } }
 
 const bearerToken = (c: Context) => c.req.header('Authorization')?.match(/^Bearer (.+)$/)?.[1]
 
@@ -14,6 +15,7 @@ export const requireCaller = createMiddleware<Env>(async (c, next) => {
   const caller = token ? await verifyAccessToken(token) : null
   if (!caller) throw new HTTPException(401, { message: 'Ikke innlogget' })
   c.set('caller', caller)
+  c.set('token', token!)
   await next()
 })
 
