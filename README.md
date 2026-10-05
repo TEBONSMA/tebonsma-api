@@ -41,7 +41,7 @@ a login and then return only public posts; everything else needs a member's toke
 |---|---|---|
 | GET | `/feed/posts?sort=&offset=&limit=` | A page of posts, pinned ones first. `sort` is `new`, `old`, `likes` or `comments` |
 | GET | `/feed/posts/:id` | One post |
-| POST | `/feed/posts` | Write a post: `{ body, visibility, attachmentIds, pollOptions }`. With `event: { title, location, startsAt, endsAt }` the post is an event, and every member is notified |
+| POST | `/feed/posts` | Write a post: `{ body, visibility, attachmentIds, pollOptions }`. With `event: { title, location, startsAt, endsAt }` the post is an event, and every member is notified. An event's poll also needs `pollQuestion`, since its text describes the event |
 | PATCH | `/feed/posts/:id` | Edit own post: `{ body, visibility, attachmentIds }`, and `event` when it is one |
 | DELETE | `/feed/posts/:id` | Delete own post (admins: any post) |
 | PUT, DELETE | `/feed/posts/:id/like` | Like or unlike |
@@ -65,6 +65,7 @@ a login and then return only public posts; everything else needs a member's toke
 | PUT | `/events/:id/rsvp` | Answer a closed (`members`) event: `{ answer }` is `yes`, `no`, or `null` to take it back |
 | GET | `/events/:id/rsvps` | Who answered what |
 | POST | `/events/:id/announcements` | Message from the organizer to every member: `{ body }` |
+| POST | `/events/:id/poll` | The organizer adds a poll to an event that has none: `{ question, pollOptions }` |
 | GET | `/calendar.ics` | The public events as an iCalendar feed for calendar apps to subscribe to |
 | GET | `/calendar/:secret.ics` | A member's feed, with the closed events too. No login; the secret in the address is the key |
 | GET | `/me/calendar` | Where the caller's own feed is: `{ path }`. Made the first time it is asked for |
