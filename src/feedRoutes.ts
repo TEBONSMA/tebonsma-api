@@ -30,6 +30,7 @@ import {
   SORTS,
   updatePost,
   vote,
+  type PollInput,
   type PostInput,
   type Sort,
   type Viewer,
@@ -128,6 +129,21 @@ function readPollOptions(raw: unknown) {
   return options
 }
 
+const MAX_POLL_QUESTION_LENGTH = 200
+
+// A post's text is its question. An event's text describes the event, so its poll asks its own.
+export function readPoll(rawOptions: unknown, rawQuestion: unknown, isEvent: boolean, postBody: string): PollInput | null {
+  const options = readPollOptions(rawOptions)
+  if (options.length === 0) return null
+  if (!isEvent) {
+    if (!postBody) throw bad('Skriv spørsmålet i innlegget')
+    return { question: null, options }
+  }
+  const question = readText(rawQuestion ?? '', 'Spørsmålet', MAX_POLL_QUESTION_LENGTH).replace(/\s+/g, ' ')
+  if (!question) throw bad('Skriv spørsmålet i spørreundersøkelsen')
+  return { question, options }
+}
+
 export const feedRoutes = new Hono<Env>()
 
 // Everything except file uploads is a small JSON body
@@ -149,12 +165,10 @@ feedRoutes.get('/feed/posts/:id', async c => c.json(await getPost(await visitorO
 feedRoutes.post('/feed/posts', requireCaller, async c => {
   const body = await readBody(c)
   const input = readPostInput(body)
-  const pollOptions = readPollOptions(body.pollOptions)
-  if (pollOptions.length > 0 && input.event) throw bad('Et arrangement kan ikke ha spørreundersøkelse')
-  if (pollOptions.length > 0 && !input.body) throw bad('Skriv spørsmålet i innlegget')
+  const poll = readPoll(body.pollOptions, body.pollQuestion, !!input.event, input.body)
   // The title is enough for an event
   if (!input.event && !input.body && input.attachmentIds.length === 0) throw bad('Innlegget er tomt')
-  return c.json(await createPost(viewerOf(c), input, pollOptions), 201)
+  return c.json(await createPost(viewerOf(c), input, poll), 201)
 })
 
 // The poll stays as it was posted; changing the options would change what people voted for
