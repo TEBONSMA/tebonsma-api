@@ -263,6 +263,31 @@ export async function listPosts(viewer: Viewer | null, sort: Sort, offset: numbe
   return { posts: await toPosts(rows.slice(0, limit), viewer), nextOffset: hasMore ? offset + limit : null }
 }
 
+// What a member has posted, newest first: their events, or everything else. Only for members,
+// who see closed posts too.
+export async function listPostsBy(viewer: Viewer, author: string, events: boolean, offset: number, limit: number) {
+  const rows = db
+    .prepare(
+      `${POST_SELECT} LEFT JOIN events e ON e.post_id = p.id
+       WHERE p.author = ? AND (e.post_id IS NOT NULL) = ?
+       ORDER BY ${events ? 'e.starts_at IS NULL DESC, e.starts_at DESC,' : ''} p.created_at DESC LIMIT ? OFFSET ?`,
+    )
+    .all(author, events ? 1 : 0, limit + 1, offset) as unknown as PostRow[]
+
+  const hasMore = rows.length > limit
+  return { posts: await toPosts(rows.slice(0, limit), viewer), nextOffset: hasMore ? offset + limit : null }
+}
+
+export function countPostsBy(author: string) {
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS total, COUNT(e.post_id) AS events FROM feed_posts p
+       LEFT JOIN events e ON e.post_id = p.id WHERE p.author = ?`,
+    )
+    .get(author) as { total: number; events: number }
+  return { posts: row.total - row.events, events: row.events }
+}
+
 const MAX_EVENTS_LISTED = 200
 
 // Events in the order they take place, the ones without a date last. With a period, only
