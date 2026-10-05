@@ -128,7 +128,12 @@ paid back out again.
 | GET | `/bet/slips?status=open\|settled` | Own slips |
 | GET | `/bet/ledger` | Own account statement |
 | GET | `/bet/leaderboard` | Everyone who has played, by coins in hand plus coins in play. Equal totals share a `rank` (1, 1, 1, 4) |
-| GET | `/bet/members/:id?status=open\|settled` | A member's page: place on the leaderboard, coins and slips (not their account statement) |
+| GET | `/bet/members/:id?status=open\|settled` | A member's page: place on the leaderboard, coins and slips (not their account statement), and with `settled` the scratch cards they have finished |
+| GET | `/bet/flaks` | The scratch cards (price, prizes and odds, rules) and own tickets not scratched to the end |
+| GET | `/bet/flaks/done` | Own tickets scratched to the end |
+| POST | `/bet/flaks/:game/buy` | Buy a ticket; its outcome is drawn now |
+| POST | `/bet/flaks/tickets/:id/scratch` | Scratch `{ field }`, or `{}` for every field left; the last one pays the prize |
+| POST | `/bet/casino/roulette/spin` | Roulette: `{ bets: [{ type, number?, stake }] }`, settled at once |
 
 `kind` is `yesno`, `choice`, `multi` or `overunder`. A multi market also takes `winners`,
 about how many of its outcomes will come true (at least 1, fewer than the outcomes, like
@@ -175,6 +180,13 @@ a cancelled match is called off, and so is the scorer market if the player doesn
 the bot found is kept with the market (`note`, `noteUrl`) and shown with it, and so is how it
 decides (`autoRule`). If an admin reopens a market the bot decided, the bot leaves it to them.
 `BOTS=off` keeps the bot from running.
+
+**Flaks** (`src/flaks.ts`, `src/flaksGames.ts`) are games of pure luck that settle at once:
+scratch cards and roulette. A scratch card's prize is drawn by its odds when it is bought, like
+a real one, and its fields are laid out to show it; they stay on the server until scratched. The
+cards follow Norsk Tipping's Flax cards of the same price (prices, top prizes and their odds,
+how often a ticket wins) and pay back 55-59 % of the stakes. Coins move through the ledger as
+`casino-stake` and `casino-payout`, with the game and what happened.
 
 ### Game scoreboards
 

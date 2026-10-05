@@ -39,6 +39,17 @@ import {
   type MarketInput,
   type SlipInput,
 } from './bets.ts'
+import {
+  buyTicket,
+  doneTickets,
+  doneTicketsOfMember,
+  listGames,
+  openTickets,
+  ROULETTE_TYPES,
+  scratch,
+  spinRoulette,
+  type RouletteBet,
+} from './flaks.ts'
 import { idByName, usernameOf } from './members.ts'
 import { MAX_ODDS, MIN_ODDS, SPREADS, type Spread } from './odds.ts'
 import { bad, readBody, readText, viewerOf } from './feedRoutes.ts'
@@ -230,6 +241,25 @@ function readSlips(body: Record<string, unknown>): SlipInput[] {
   })
 }
 
+// [{ type, number?, stake }], as the roulette table sends them
+function readRouletteBets(body: Record<string, unknown>): RouletteBet[] {
+  const { bets } = body
+  if (!Array.isArray(bets) || bets.length === 0) throw bad('Legg på minst én innsats')
+  if (bets.length > 50) throw bad('For mange innsatser')
+  return bets.map(raw => {
+    const { type, number, stake } = (raw ?? {}) as Record<string, unknown>
+    if (typeof type !== 'string' || !ROULETTE_TYPES.includes(type as RouletteBet['type'])) throw bad('Ugyldig innsats')
+    if (typeof stake !== 'number' || !Number.isInteger(stake) || stake < 1 || stake > MAX_STAKE) {
+      throw bad('Innsatsen må være et helt antall mynter')
+    }
+    const highest = type === 'straight' ? 36 : type === 'dozen' || type === 'column' ? 3 : null
+    if (highest === null) return { type: type as RouletteBet['type'], stake }
+    const lowest = type === 'straight' ? 0 : 1
+    if (typeof number !== 'number' || !Number.isInteger(number) || number < lowest || number > highest) throw bad('Ugyldig tall')
+    return { type: type as RouletteBet['type'], number, stake }
+  })
+}
+
 const id = (c: Context) => c.req.param('id') ?? ''
 
 betRoutes.get('/bet/me', async c => c.json(await getAccount(viewerOf(c))))
@@ -332,7 +362,35 @@ betRoutes.post('/bet/slips', async c => {
 })
 
 betRoutes.get('/bet/slips', c => c.json(listSlips(viewerOf(c), c.req.query('status') === 'settled')))
+
+// Flaks: scratch cards and roulette, settled at once
+betRoutes.get('/bet/flaks', c => c.json({ games: listGames(), tickets: openTickets(viewerOf(c)) }))
+// Own tickets scratched to the end
+betRoutes.get('/bet/flaks/done', c => c.json(doneTickets(viewerOf(c))))
+betRoutes.post('/bet/flaks/:game/buy', async c => {
+  const viewer = viewerOf(c)
+  const ticket = buyTicket(viewer, c.req.param('game') ?? '')
+  return c.json({ ticket, account: await getAccount(viewer) }, 201)
+})
+// { field } scratches one field, {} all that are left
+betRoutes.post('/bet/flaks/tickets/:id/scratch', async c => {
+  const viewer = viewerOf(c)
+  const { field } = await readBody(c)
+  if (field !== undefined && typeof field !== 'number') throw bad('Ugyldig felt')
+  const ticket = scratch(viewer, id(c), field as number | undefined)
+  return c.json({ ticket, account: await getAccount(viewer) })
+})
+betRoutes.post('/bet/casino/roulette/spin', async c => {
+  const viewer = viewerOf(c)
+  const spin = spinRoulette(viewer, readRouletteBets(await readBody(c)))
+  return c.json({ ...spin, account: await getAccount(viewer) })
+})
 betRoutes.get('/bet/ledger', c => c.json(listLedger(viewerOf(c))))
 betRoutes.get('/bet/leaderboard', async c => c.json(await getLeaderboard()))
 // Another member's page: their place, coins and slips (?status=open|settled)
-betRoutes.get('/bet/members/:id', async c => c.json(await getMemberPage(id(c), c.req.query('status') === 'settled')))
+// With the scratch cards they have finished among the settled
+betRoutes.get('/bet/members/:id', async c => {
+  const settled = c.req.query('status') === 'settled'
+  const page = await getMemberPage(id(c), settled)
+  return c.json({ ...page, tickets: settled ? doneTicketsOfMember(id(c)) : [] })
+})

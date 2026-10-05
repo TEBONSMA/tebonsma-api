@@ -99,6 +99,29 @@ const SELECTION_COLUMNS = `
     odds       INTEGER NOT NULL,
     shares     REAL NOT NULL
 `
+// start: the coins every member begins with. allowance: the Monday coins, one row per Monday
+// (period). stake: a slip played. payout, refund and correction: what a slip has paid back,
+// kept equal to what it should pay as markets are decided or reopened. casino-stake and
+// casino-payout: what a game of luck (src/flaks.ts) took and paid, with the game and what
+// happened in it.
+const LEDGER_COLUMNS = `
+    id         TEXT PRIMARY KEY,
+    username   TEXT NOT NULL,
+    amount     INTEGER NOT NULL,
+    kind       TEXT NOT NULL CHECK (kind IN ('start', 'allowance', 'stake', 'payout', 'refund', 'correction', 'casino-stake', 'casino-payout')),
+    slip_id    TEXT,
+    period     TEXT,
+    game       TEXT,
+    detail     TEXT,
+    created_at TEXT NOT NULL
+`
+const LEDGER_INDEXES = `
+  CREATE INDEX IF NOT EXISTS bet_ledger_member ON bet_ledger (username, created_at);
+  CREATE INDEX IF NOT EXISTS bet_ledger_slip ON bet_ledger (slip_id);
+  CREATE UNIQUE INDEX IF NOT EXISTS bet_ledger_start ON bet_ledger (username) WHERE kind = 'start';
+  CREATE UNIQUE INDEX IF NOT EXISTS bet_ledger_allowance ON bet_ledger (username, period) WHERE kind = 'allowance';
+`
+
 const SELECTION_INDEXES = `
   CREATE UNIQUE INDEX IF NOT EXISTS bet_selections_pick ON bet_selections (slip_id, market_id, COALESCE(outcome_id, ''));
   CREATE INDEX IF NOT EXISTS bet_selections_market ON bet_selections (market_id);
@@ -176,22 +199,8 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS bet_selections (${SELECTION_COLUMNS});
   ${SELECTION_INDEXES}
 
-  -- start: the coins every member begins with. allowance: the Monday coins, one row per
-  -- Monday (period). stake: a slip played. payout, refund and correction: what a slip has
-  -- paid back, kept equal to what it should pay as markets are decided or reopened.
-  CREATE TABLE IF NOT EXISTS bet_ledger (
-    id         TEXT PRIMARY KEY,
-    username   TEXT NOT NULL,
-    amount     INTEGER NOT NULL,
-    kind       TEXT NOT NULL CHECK (kind IN ('start', 'allowance', 'stake', 'payout', 'refund', 'correction')),
-    slip_id    TEXT,
-    period     TEXT,
-    created_at TEXT NOT NULL
-  );
-  CREATE INDEX IF NOT EXISTS bet_ledger_member ON bet_ledger (username, created_at);
-  CREATE INDEX IF NOT EXISTS bet_ledger_slip ON bet_ledger (slip_id);
-  CREATE UNIQUE INDEX IF NOT EXISTS bet_ledger_start ON bet_ledger (username) WHERE kind = 'start';
-  CREATE UNIQUE INDEX IF NOT EXISTS bet_ledger_allowance ON bet_ledger (username, period) WHERE kind = 'allowance';
+  CREATE TABLE IF NOT EXISTS bet_ledger (${LEDGER_COLUMNS});
+  ${LEDGER_INDEXES}
 `)
 
 // Sections came after the first markets were made; those start out under no section, in the
@@ -233,6 +242,8 @@ if (!tableSql('bet_markets').includes("'multi'")) {
   rebuild('bet_markets', MARKET_COLUMNS, 'CREATE INDEX IF NOT EXISTS bet_markets_event ON bet_markets (event_id);')
 }
 if (tableSql('bet_selections').includes('PRIMARY KEY')) rebuild('bet_selections', SELECTION_COLUMNS, SELECTION_INDEXES)
+// And the games of luck, with their own kinds of rows in the ledger
+if (!tableSql('bet_ledger').includes('casino-stake')) rebuild('bet_ledger', LEDGER_COLUMNS, LEDGER_INDEXES)
 
 // Which outcomes came true used to be only the market's winner_id
 const outcomeColumns = db.prepare('PRAGMA table_info(bet_outcomes)').all() as { name: string }[]
@@ -332,7 +343,7 @@ export function ensureAccount(username: string) {
   })
 }
 
-const balanceOf = (username: string) =>
+export const balanceOf = (username: string) =>
   (db.prepare('SELECT COALESCE(SUM(amount), 0) AS n FROM bet_ledger WHERE username = ?').get(username) as { n: number }).n
 
 const inPlayOf = (username: string) =>
@@ -341,6 +352,20 @@ const inPlayOf = (username: string) =>
       n: number
     }
   ).n
+
+// What a game of luck took from or paid to a member. Call inside a transaction with the rest
+// of the game's changes.
+export function addCasinoRow(username: string, amount: number, game: string, detail: string | null) {
+  db.prepare('INSERT INTO bet_ledger (id, username, amount, kind, game, detail, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
+    randomUUID(),
+    username,
+    amount,
+    amount < 0 ? 'casino-stake' : 'casino-payout',
+    game,
+    detail,
+    now(),
+  )
+}
 
 export async function getAccount(viewer: Viewer) {
   const members = await getMembers([viewer.username])
@@ -1450,7 +1475,7 @@ export const listSlips = (viewer: Viewer, settled: boolean) => slipsOf(viewer.us
 export function listLedger(viewer: Viewer) {
   const rows = db
     .prepare(
-      `SELECT id, amount, kind, slip_id, period, created_at FROM bet_ledger WHERE username = ?
+      `SELECT id, amount, kind, slip_id, period, game, detail, created_at FROM bet_ledger WHERE username = ?
        ORDER BY created_at DESC, rowid DESC LIMIT ?`,
     )
     .all(viewer.username, LEDGER_SHOWN) as {
@@ -1459,6 +1484,8 @@ export function listLedger(viewer: Viewer) {
     kind: string
     slip_id: string | null
     period: string | null
+    game: string | null
+    detail: string | null
     created_at: string
   }[]
   const legs = legsOf([...new Set(rows.flatMap(row => (row.slip_id ? [row.slip_id] : [])))])
@@ -1480,6 +1507,8 @@ export function listLedger(viewer: Viewer) {
               .map(leg => ({ question: leg.question, label: labelOf(leg), eventTitle: leg.event_title ?? leg.group_title })),
           }
         : null,
+      // A game of luck instead of a slip
+      casino: row.game ? { game: row.game, detail: row.detail } : null,
     }
     balance -= row.amount
     return entry
