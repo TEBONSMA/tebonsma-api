@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { HTTPException } from 'hono/http-exception'
 import { db, transaction } from './db.ts'
+import { voidEventMarkets } from './bets.ts'
 import { eventOf, isEvent, saveEvent, type EventInput } from './events.ts'
 import { getMembers, type PublicMember } from './members.ts'
 
@@ -41,10 +42,12 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS feed_posts_created ON feed_posts (created_at DESC);
 
-  -- post_id is empty from the upload until the post is saved
+  -- A file is in a post (post_id) or on a comment (comment_id; its post is the comment's).
+  -- Both are empty from the upload until the post or comment is saved.
   CREATE TABLE IF NOT EXISTS feed_attachments (
     id         TEXT PRIMARY KEY,
     post_id    TEXT REFERENCES feed_posts (id) ON DELETE CASCADE,
+    comment_id TEXT REFERENCES feed_comments (id) ON DELETE CASCADE,
     owner      TEXT NOT NULL,
     position   INTEGER NOT NULL DEFAULT 0,
     name       TEXT NOT NULL,
@@ -55,6 +58,7 @@ db.exec(`
     created_at TEXT NOT NULL
   );
   CREATE INDEX IF NOT EXISTS feed_attachments_post ON feed_attachments (post_id);
+  CREATE INDEX IF NOT EXISTS feed_attachments_comment ON feed_attachments (comment_id);
 
   CREATE TABLE IF NOT EXISTS feed_poll_options (
     id       TEXT PRIMARY KEY,
@@ -135,14 +139,6 @@ db.exec(`
     PRIMARY KEY (announcement_id, username)
   );
 `)
-
-// Files on a comment came after the first databases were made. They have comment_id set
-// and no post_id; the post they belong to is the comment's.
-const attachmentColumns = db.prepare('PRAGMA table_info(feed_attachments)').all() as { name: string }[]
-if (!attachmentColumns.some(column => column.name === 'comment_id')) {
-  db.exec('ALTER TABLE feed_attachments ADD COLUMN comment_id TEXT REFERENCES feed_comments (id) ON DELETE CASCADE')
-}
-db.exec('CREATE INDEX IF NOT EXISTS feed_attachments_comment ON feed_attachments (comment_id)')
 
 // An upload that is neither in a post nor on a comment yet
 const UNATTACHED = 'post_id IS NULL AND comment_id IS NULL'
@@ -272,15 +268,17 @@ const MAX_EVENTS_LISTED = 200
 // Events in the order they take place, the ones without a date last. With a period, only
 // the events that overlap it.
 export async function listEvents(viewer: Viewer | null, from: string | null, to: string | null) {
+  // Read the other way round, so that past the limit it is the oldest events that are left
+  // out and never the coming ones, then turned the right way
   const rows = db
     .prepare(
       `${POST_SELECT} JOIN events e ON e.post_id = p.id
        WHERE (? = 1 OR p.visibility = 'public')
          AND (? IS NULL OR e.ends_at >= ?) AND (? IS NULL OR e.starts_at <= ?)
-       ORDER BY e.starts_at IS NULL, e.starts_at LIMIT ?`,
+       ORDER BY e.starts_at IS NULL DESC, e.starts_at DESC, p.created_at DESC LIMIT ?`,
     )
     .all(viewer ? 1 : 0, from, from, to, to, MAX_EVENTS_LISTED) as unknown as PostRow[]
-  return toPosts(rows, viewer)
+  return toPosts(rows.reverse(), viewer)
 }
 
 export interface PostInput {
@@ -347,7 +345,11 @@ export function deletePost(viewer: Viewer, id: string) {
   if (post.author !== viewer.username && !viewer.admin) {
     throw new HTTPException(403, { message: 'Du kan bare slette egne innlegg' })
   }
-  db.prepare('DELETE FROM feed_posts WHERE id = ?').run(id)
+  transaction(() => {
+    // Bets on an event are paid back before it goes
+    voidEventMarkets(id)
+    db.prepare('DELETE FROM feed_posts WHERE id = ?').run(id)
+  })
 }
 
 export function setPinned(viewer: Viewer, id: string, pinned: boolean) {

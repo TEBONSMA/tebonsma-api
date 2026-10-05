@@ -88,6 +88,17 @@ export async function getMembers(usernames: Iterable<string>) {
   return new Map(unique.map(username => [username, toPublic(findRow(username)!)]))
 }
 
+// The member with this name, for imports that name who is kept out of a market
+export function idByName(name: string) {
+  const wanted = name.trim().toLocaleLowerCase('nb')
+  const rows = db.prepare('SELECT id, display_name FROM members').all() as { id: string; display_name: string }[]
+  return rows.find(row => row.display_name.toLocaleLowerCase('nb') === wanted)?.id
+}
+
+// The member behind a public id, if the API has seen them
+export const usernameOf = (id: string) =>
+  (db.prepare('SELECT username FROM members WHERE id = ?').get(id) as { username: string } | undefined)?.username
+
 export function getAvatar(id: string) {
   const row = db.prepare('SELECT avatar FROM members WHERE id = ?').get(id) as { avatar: Uint8Array | null } | undefined
   return row?.avatar ?? null

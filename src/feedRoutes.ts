@@ -89,7 +89,8 @@ function readTime(raw: unknown) {
 function readEvent(raw: unknown): EventInput | null {
   if (raw === undefined || raw === null) return null
   if (typeof raw !== 'object' || Array.isArray(raw)) throw bad('Ugyldig arrangement')
-  const { title, location, startsAt = null, endsAt = null } = raw as Record<string, unknown>
+  const { title, location, startsAt = null, endsAt = null, betting } = raw as Record<string, unknown>
+  if (betting !== undefined && typeof betting !== 'boolean') throw bad('Ugyldig arrangement')
 
   const event: EventInput = {
     // A title is one line
@@ -97,6 +98,7 @@ function readEvent(raw: unknown): EventInput | null {
     location: readText(location ?? '', 'Stedet', MAX_EVENT_LOCATION_LENGTH).replace(/\s+/g, ' '),
     startsAt: startsAt === null ? null : readTime(startsAt),
     endsAt: endsAt === null ? null : readTime(endsAt),
+    betting,
   }
   if (!event.title) throw bad('Arrangementet trenger en tittel')
   if ((event.startsAt === null) !== (event.endsAt === null)) throw bad('Oppgi både start og slutt, eller ingen av dem')
