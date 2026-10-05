@@ -2,8 +2,8 @@ import { Hono } from 'hono'
 import { bodyLimit } from 'hono/body-limit'
 import { requireCaller, type Env } from './auth.ts'
 import { listRsvps, setRsvp } from './events.ts'
-import { addEventPoll, getPost, listEvents, sendAnnouncement } from './feed.ts'
-import { bad, readBody, readPoll, readText, viewerOf, visitorOf } from './feedRoutes.ts'
+import { getPost, listEvents, sendAnnouncement } from './feed.ts'
+import { bad, readBody, readText, viewerOf, visitorOf } from './feedRoutes.ts'
 
 const MAX_ANNOUNCEMENT_LENGTH = 500
 
@@ -44,11 +44,4 @@ eventRoutes.post('/events/:id/announcements', requireCaller, async c => {
   if (!text) throw bad('Kunngjøringen er tom')
   sendAnnouncement(viewerOf(c), c.req.param('id'), text)
   return c.json({ ok: true }, 201)
-})
-
-eventRoutes.post('/events/:id/poll', requireCaller, async c => {
-  const { pollOptions, question } = await readBody(c)
-  const poll = readPoll(pollOptions, question, true, '')
-  if (!poll) throw bad('En spørreundersøkelse trenger minst to svaralternativer')
-  return c.json(addEventPoll(viewerOf(c), c.req.param('id'), poll), 201)
 })
