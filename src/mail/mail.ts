@@ -217,6 +217,18 @@ export function summarize(mailbox: Mailbox, head: Head): MessageSummary {
   }
 }
 
+// The mails shown get their preview now: the ones that were looked through to sort and group
+// them were fetched without, since a preview means reading the start of every mail
+async function fillPreviews(account: Account, heads: Head[]) {
+  const byFolder = new Map<string, Head[]>()
+  for (const head of heads) if (!head.preview) byFolder.set(head.folder, [...(byFolder.get(head.folder) ?? []), head])
+  for (const [path, missing] of byFolder) {
+    const full = await backend().heads(account, path, missing.map(head => head.uid))
+    const previews = new Map(full.map(head => [head.uid, head.preview]))
+    for (const head of missing) head.preview = previews.get(head.uid) ?? ''
+  }
+}
+
 export async function headsInOrder(account: Account, path: string, uids: number[]) {
   const heads = await backend().heads(account, path, uids)
   const position = new Map(uids.map((uid, index) => [uid, index]))
@@ -353,7 +365,7 @@ export async function listMessages(account: Account, options: ListOptions) {
   const found: Head[] = []
   for (const folder of folders) {
     const uids = (await backend().search(account, folder.path, query)).slice(-WINDOW)
-    found.push(...(await backend().heads(account, folder.path, uids)))
+    found.push(...(await backend().heads(account, folder.path, uids, { preview: false })))
   }
 
   if (conversational) {
@@ -370,6 +382,7 @@ export async function listMessages(account: Account, options: ListOptions) {
       .slice(0, WINDOW)
     const page = sorted.slice(options.offset, options.offset + options.limit)
     const end = options.offset + page.length
+    await fillPreviews(account, page.map(({ group }) => group[group.length - 1]))
     return {
       messages: page.map(({ group }) => conversationRow(mailbox, group)),
       nextOffset: end < sorted.length ? end : null,
@@ -379,6 +392,7 @@ export async function listMessages(account: Account, options: ListOptions) {
 
   const ordered = found.sort(COMPARE[options.sort]).slice(0, WINDOW)
   const page = ordered.slice(options.offset, options.offset + options.limit)
+  await fillPreviews(account, page)
   const end = options.offset + page.length
   return {
     messages: page.map(head => summarize(mailbox, head)),
@@ -427,14 +441,20 @@ export async function load(account: Account, id: string) {
   return { mailbox, folder, ref, head, parsed: await simpleParser(raw) }
 }
 
-export async function readMessage(account: Account, id: string, showImages: boolean): Promise<MessageView> {
-  const { mailbox, folder, ref, head, parsed } = await load(account, id)
-
+// The pictures that came with a mail, as data addresses a frame can show without fetching anything
+function inlineImages(parsed: ParsedMail) {
   const inline = new Map<string, string>()
   for (const attachment of parsed.attachments) {
     if (!attachment.cid || !INLINE_IMAGE_TYPES.test(attachment.contentType) || attachment.size > MAX_INLINE_IMAGE_BYTES) continue
     inline.set(attachment.cid.replace(/^<|>$/g, ''), `data:${attachment.contentType.toLowerCase()};base64,${attachment.content.toString('base64')}`)
   }
+  return inline
+}
+
+export async function readMessage(account: Account, id: string, showImages: boolean): Promise<MessageView> {
+  const { mailbox, folder, ref, head, parsed } = await load(account, id)
+
+  const inline = inlineImages(parsed)
 
   const text = parsed.text ?? ''
   const { html, blockedImages } = parsed.html
@@ -473,5 +493,36 @@ export async function readAttachment(account: Account, id: string, n: number) {
     name: attachment.filename || 'vedlegg',
     mime: safeMime(attachment.contentType),
     content: attachment.content,
+  }
+}
+
+// A mail as it is shared: cleaned like when it is read, with pictures from other sites left out, and
+// with the contents of the files that came with it. Reading this does not mark the mail as read.
+export interface Snapshot {
+  subject: string
+  from: Address | null
+  to: Address[]
+  cc: Address[]
+  date: string
+  html: string
+  text: string
+  files: { name: string; mime: string; content: Buffer }[]
+}
+
+export async function snapshotMessage(account: Account, id: string): Promise<Snapshot> {
+  const { head, parsed } = await load(account, id)
+  const text = parsed.text ?? ''
+  const html = parsed.html ? sanitizeIncoming(parsed.html, { inline: inlineImages(parsed), showImages: false }).html : textToHtml(text)
+  return {
+    subject: head.subject,
+    from: head.from,
+    to: head.to,
+    cc: head.cc,
+    date: head.date,
+    html,
+    text,
+    files: parsed.attachments
+      .filter(isListed)
+      .map(attachment => ({ name: attachment.filename || 'vedlegg', mime: safeMime(attachment.contentType), content: attachment.content })),
   }
 }

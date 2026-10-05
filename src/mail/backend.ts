@@ -70,7 +70,8 @@ export interface MailBackend {
   status(account: Account, folder: string): Promise<{ total: number; unseen: number; uidValidity: number; uidNext: number }>
   // Matching UIDs, oldest first
   search(account: Account, folder: string, query: SearchQuery): Promise<number[]>
-  heads(account: Account, folder: string, uids: number[]): Promise<Head[]>
+  // The preview needs the start of every mail, which is slow for many mails at a time, so it can be left out (and come back empty)
+  heads(account: Account, folder: string, uids: number[], options?: { preview?: boolean }): Promise<Head[]>
   fetchRaw(account: Account, folder: string, uid: number): Promise<Buffer | null>
   setFlags(account: Account, folder: string, uids: number[], change: { add?: string[]; remove?: string[] }): Promise<void>
   move(account: Account, folder: string, uids: number[], destination: string): Promise<void>

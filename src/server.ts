@@ -8,6 +8,8 @@ import { config } from './config.ts'
 import { eventRoutes } from './eventRoutes.ts'
 import { feedRoutes } from './feedRoutes.ts'
 import { mailRoutes } from './mailRoutes.ts'
+import { hasBackend, useBackend } from './mail/backend.ts'
+import { imapBackend } from './mail/imapBackend.ts'
 import { startScheduler } from './mail/scheduled.ts'
 import { getProfile as readProfile, setAvatar, updateProfile, type ProfileChanges } from './lldap.ts'
 import { rememberProfile } from './members.ts'
@@ -138,6 +140,8 @@ app.onError((err, c) => {
 
 app.notFound(c => c.json({ error: 'Finnes ikke' }, 404))
 
+// The real mail server, unless a stand-in was registered first (npm run dev:mock does)
+if (!hasBackend()) useBackend(imapBackend)
 startScheduler()
 
 serve({ fetch: app.fetch, port: config.port }, info => {

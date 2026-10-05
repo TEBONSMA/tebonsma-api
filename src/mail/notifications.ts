@@ -182,3 +182,11 @@ export function markMailOpened(owner: string, mails: { id: string; messageId: st
     ).run(now, owner, mail.id, mail.messageId ?? '')
   }
 }
+
+// Tells a member that somebody shared a mail with them
+export function addShareNotice(recipient: string, notice: { shareId: string; sharer: string; sharerName: string; subject: string }) {
+  db.prepare(
+    `INSERT INTO mail_notifications (id, recipient, kind, mail_id, sender, actor, excerpt, created_at)
+     VALUES (?, ?, 'mail_share', ?, ?, ?, ?, ?)`,
+  ).run(randomUUID(), recipient, notice.shareId, notice.sharerName, notice.sharer, notice.subject || '(uten emne)', new Date().toISOString())
+}

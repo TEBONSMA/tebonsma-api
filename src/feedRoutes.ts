@@ -38,7 +38,7 @@ import { markMailNotificationsRead } from './mail/notifications.ts'
 import { pollMail } from './mail/poll.ts'
 import { getAvatar } from './members.ts'
 
-const MAX_POST_LENGTH = 5000
+export const MAX_POST_LENGTH = 5000
 const MAX_COMMENT_LENGTH = 2000
 const MAX_REASON_LENGTH = 500
 const MAX_POLL_OPTIONS = 6

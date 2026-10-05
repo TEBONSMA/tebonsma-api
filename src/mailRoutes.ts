@@ -2,7 +2,7 @@ import { Hono, type Context } from 'hono'
 import { HTTPException } from 'hono/http-exception'
 import { bodyLimit } from 'hono/body-limit'
 import { requireCaller, type Env } from './auth.ts'
-import { bad, readBody, readText, UPLOAD_HEADERS } from './feedRoutes.ts'
+import { bad, readBody, readText, UPLOAD_HEADERS, viewerOf } from './feedRoutes.ts'
 import {
   changeLabels,
   createOwnFolder,
@@ -25,6 +25,7 @@ import { readUntil, releaseDue, snoozeMessages } from './mail/snooze.ts'
 import { finishOffline, hasOfflineToken, offlineAvailable, revokeOffline, startOffline } from './mail/offline.ts'
 import { cancelScheduled, readSendAt, rescheduleMail, scheduleMail, scheduledTimes, settleFailed } from './mail/scheduled.ts'
 import { forgetInboxCount, markMailOpened } from './mail/notifications.ts'
+import { deleteShared, countShared, listShared, readNote, readShared, readSharedFile, shareToFeed, shareWithMember } from './mail/share.ts'
 import { createLabel, deleteLabel, listLabels, updateLabel } from './mail/labels.ts'
 import {
   accountFor,
@@ -56,6 +57,7 @@ mailRoutes.use('/mail/drafts/*', bodyLimit({ maxSize: 2 * 1024 * 1024 }))
 mailRoutes.use('/mail/send', bodyLimit({ maxSize: 2 * 1024 * 1024 }))
 mailRoutes.use('/mail/outbox/*', jsonLimit)
 mailRoutes.use('/mail/scheduled/*', jsonLimit)
+mailRoutes.use('/mail/shared/*', jsonLimit)
 mailRoutes.use('/mail/offline/*', jsonLimit)
 mailRoutes.use('/mail/offline', jsonLimit)
 
@@ -75,7 +77,7 @@ mailRoutes.get('/mail/folders', requireCaller, async c => {
   // Scheduled mails that could not be sent go to Drafts now that the mailbox is open
   await settleFailed(account, ownerOf(c)).catch(err => console.error('Moving unsent mail to Drafts failed:', err))
   const mailbox = await openMailbox(account)
-  return c.json({ folders: folderViews(mailbox), labels: listLabels(ownerOf(c)) })
+  return c.json({ folders: folderViews(mailbox), labels: listLabels(ownerOf(c)), shared: countShared(ownerOf(c)) })
 })
 
 mailRoutes.post('/mail/folders', requireCaller, async c => {
@@ -121,6 +123,11 @@ mailRoutes.get('/mail/messages', requireCaller, async c => {
   const offset = Math.max(0, Math.trunc(Number(c.req.query('offset') ?? 0)) || 0)
   const limit = Math.min(MAX_PAGE_SIZE, Math.max(1, Math.trunc(Number(c.req.query('limit') ?? PAGE_SIZE)) || PAGE_SIZE))
   const folder = c.req.query('folder') ?? 'inbox'
+  // Mails other members have shared are kept here, not in the mailbox, and listed the same way
+  if (folder === 'shared') {
+    const filter = readFilter(c)
+    return c.json(await listShared(ownerOf(c), offset, limit, sort === 'old' ? 'old' : 'new', { unread: filter.unread, q: filter.text }))
+  }
   const page = await listMessages(await accountOf(c), {
     folder,
     offset,
@@ -334,3 +341,52 @@ mailRoutes.get('/mail/auto-reply', requireCaller, async c => c.json(await getAut
 mailRoutes.put('/mail/auto-reply', requireCaller, async c =>
   c.json(await saveAutoReply(await accountOf(c), readAutoReply(await readBody(c)))),
 )
+
+// --- Sharing ---
+
+// The member's copy of a mail goes to another member, who finds it under "Delt med meg"
+mailRoutes.post('/mail/messages/:id/share/member', requireCaller, async c => {
+  const body = await readBody(c)
+  if (typeof body.memberId !== 'string') throw bad('Velg et medlem')
+  await shareWithMember(await accountOf(c), ownerOf(c), c.req.param('id'), body.memberId, readNote(body.note))
+  return c.json({ ok: true }, 201)
+})
+
+// The mail is quoted in a post in the feed, with the files it came with
+mailRoutes.post('/mail/messages/:id/share/feed', requireCaller, async c => {
+  const body = await readBody(c)
+  const visibility = body.visibility ?? 'members'
+  if (visibility !== 'public' && visibility !== 'members') throw bad('Velg hvem som skal se innlegget')
+  const comment = readText(body.comment ?? '', 'Kommentaren', 1000)
+  const { post, skipped } = await shareToFeed(await accountOf(c), viewerOf(c), c.req.param('id'), { comment, visibility })
+  return c.json({ post, skipped }, 201)
+})
+
+mailRoutes.get('/mail/shared/:id', requireCaller, async c => {
+  const shared = await readShared(ownerOf(c), c.req.param('id'))
+  markMailOpened(ownerOf(c), [{ id: shared.id, messageId: null }])
+  return c.json(shared)
+})
+
+mailRoutes.get('/mail/shared/:id/attachments/:n', requireCaller, c => {
+  const n = Number(c.req.param('n'))
+  if (!Number.isInteger(n) || n < 0) throw bad('Ugyldig vedlegg')
+  const file = readSharedFile(ownerOf(c), c.req.param('id'), n)
+  return c.body(new Uint8Array(file.content), 200, {
+    ...UPLOAD_HEADERS,
+    'Content-Type': file.mime,
+    'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(file.name)}`,
+    'Cache-Control': 'private, no-store',
+  })
+})
+
+// Takes mails off the member's list of shared mail. The sender's own mail is not touched.
+mailRoutes.delete('/mail/shared/:id', requireCaller, c => {
+  deleteShared(ownerOf(c), [c.req.param('id')])
+  return c.json({ ok: true })
+})
+mailRoutes.post('/mail/shared/delete', requireCaller, async c => {
+  const { ids } = await readBody(c)
+  deleteShared(ownerOf(c), readIds(ids))
+  return c.json({ ok: true })
+})
