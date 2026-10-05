@@ -5,6 +5,7 @@ import { cors } from 'hono/cors'
 import { HTTPException } from 'hono/http-exception'
 import { requireCaller, type Env } from './auth.ts'
 import { betRoutes } from './betRoutes.ts'
+import { startBots } from './bots/index.ts'
 import { config } from './config.ts'
 import { eventRoutes } from './eventRoutes.ts'
 import { feedRoutes } from './feedRoutes.ts'
@@ -140,3 +141,5 @@ app.notFound(c => c.json({ error: 'Finnes ikke' }, 404))
 serve({ fetch: app.fetch, port: config.port }, info => {
   console.log(`tebonsma-api listening on port ${info.port}`)
 })
+
+startBots()

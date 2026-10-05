@@ -1,27 +1,37 @@
 import { Hono, type Context } from 'hono'
 import { bodyLimit } from 'hono/body-limit'
+import { HTTPException } from 'hono/http-exception'
 import { requireCaller, type Env } from './auth.ts'
 import {
   closeMarket,
+  createGroup,
   createMarket,
   createSection,
+  DEFAULT_GROUP,
+  deleteGroup,
   deleteMarket,
   deleteSection,
   ensureAccount,
   getAccount,
   getEvent,
+  getGroup,
   getLeaderboard,
   getMemberPage,
   getSlips,
+  inGroup,
   listEvents,
+  listGroups,
   listLedger,
   listMembers,
-  listOther,
   listSlips,
+  onEvent,
   placeSlips,
+  renameGroup,
   renameSection,
   reopenMarket,
+  saveFront,
   saveLayout,
+  sectionNamed,
   settleMarket,
   updateMarket,
   voidMarket,
@@ -29,6 +39,7 @@ import {
   type MarketInput,
   type SlipInput,
 } from './bets.ts'
+import { idByName, usernameOf } from './members.ts'
 import { MAX_ODDS, MIN_ODDS, SPREADS, type Spread } from './odds.ts'
 import { bad, readBody, readText, viewerOf } from './feedRoutes.ts'
 
@@ -41,7 +52,9 @@ const MAX_SELECTIONS = 10
 const MAX_STAKE = 1_000_000
 const MAX_EXCLUDED = 50
 const MAX_SECTION_TITLE_LENGTH = 60
+const MAX_GROUP_TITLE_LENGTH = 40
 const MAX_LAYOUT_ITEMS = 500
+const MAX_IMPORT = 30
 // Over/under: how many numbers the slider can have, and how far up it can go
 const MAX_NUMBERS = 200
 const MAX_HIGHEST = 100_000
@@ -138,6 +151,45 @@ const readSectionTitle = (raw: unknown) => {
   return title
 }
 
+const readGroupTitle = (raw: unknown) => {
+  const title = readLine(raw, 'Gruppen', MAX_GROUP_TITLE_LENGTH)
+  if (!title) throw bad('Gruppen trenger et navn')
+  return title
+}
+
+// ['event:<id>', 'group:<id>', ...], from the top of the front page
+function readFront(body: Record<string, unknown>) {
+  const { items } = body
+  if (!Array.isArray(items) || items.length > MAX_LAYOUT_ITEMS || items.some(item => typeof item !== 'string')) {
+    throw bad('Ugyldig rekkefølge')
+  }
+  return items as string[]
+}
+
+// Markets made in one go: each like a new market, plus the title
+// of the section to put it under. Who is kept out can be given by name as well as by id.
+function readImport(body: Record<string, unknown>) {
+  const { markets } = body
+  if (!Array.isArray(markets) || markets.length === 0) throw bad('Fant ingen spill å importere')
+  if (markets.length > MAX_IMPORT) throw bad(`Du kan importere opptil ${MAX_IMPORT} spill om gangen`)
+  return markets.map((raw, i) => {
+    const entry = (raw ?? {}) as Record<string, unknown>
+    try {
+      const market = readMarket(entry)
+      const excluded = market.excluded.map(member => {
+        const id = usernameOf(member) ? member : idByName(member)
+        if (!id) throw bad(`Fant ikke medlemmet «${member}»`)
+        return id
+      })
+      const section = entry.section === undefined ? null : readSectionTitle(entry.section)
+      return { market: { ...market, excluded }, section }
+    } catch (err) {
+      if (err instanceof HTTPException) throw bad(`Spill ${i + 1}: ${err.message}`)
+      throw err
+    }
+  })
+}
+
 // [{ sectionId, marketIds }], the groups in the order they are to be shown
 function readLayout(body: Record<string, unknown>): LayoutGroup[] {
   const { groups } = body
@@ -183,21 +235,48 @@ const id = (c: Context) => c.req.param('id') ?? ''
 betRoutes.get('/bet/me', async c => c.json(await getAccount(viewerOf(c))))
 
 betRoutes.get('/bet/events', async c => c.json(await listEvents(viewerOf(c))))
-betRoutes.get('/bet/other', async c => c.json(await listOther(viewerOf(c))))
 betRoutes.get('/bet/members', async c => c.json(await listMembers()))
 betRoutes.get('/bet/events/:id', async c => c.json(await getEvent(viewerOf(c), id(c))))
 
 betRoutes.post('/bet/events/:id/markets', async c => {
-  const market = createMarket(viewerOf(c), id(c), readMarket(await readBody(c)))
+  const market = createMarket(viewerOf(c), onEvent(id(c)), readMarket(await readBody(c)))
   return c.json(market, 201)
 })
 
-// Sections, and the order of markets and sections, on an event or outside events (admins)
+// Groups of markets that aren't about an event, which admins run, and the order of events and
+// groups on the front page
+betRoutes.get('/bet/groups', c => c.json(listGroups(viewerOf(c))))
+betRoutes.get('/bet/groups/:id', async c => c.json(await getGroup(viewerOf(c), id(c))))
+betRoutes.post('/bet/groups', async c => c.json(createGroup(viewerOf(c), readGroupTitle((await readBody(c)).title)), 201))
+betRoutes.patch('/bet/groups/:id', async c => c.json(renameGroup(viewerOf(c), id(c), readGroupTitle((await readBody(c)).title))))
+betRoutes.delete('/bet/groups/:id', c => {
+  deleteGroup(viewerOf(c), id(c))
+  return c.json({ ok: true })
+})
+betRoutes.put('/bet/front', async c => {
+  saveFront(viewerOf(c), readFront(await readBody(c)))
+  return c.json({ ok: true })
+})
+betRoutes.post('/bet/groups/:id/markets', async c => c.json(createMarket(viewerOf(c), inGroup(id(c)), readMarket(await readBody(c))), 201))
+// Several markets at once, all checked before any is made
+betRoutes.post('/bet/groups/:id/import', async c => {
+  const viewer = viewerOf(c)
+  const container = inGroup(id(c))
+  const entries = readImport(await readBody(c))
+  const markets = entries.map(({ market, section }) =>
+    createMarket(viewer, container, { ...market, sectionId: section && sectionNamed(viewer, container, section).id }),
+  )
+  return c.json({ created: markets.length }, 201)
+})
+// What the site before groups asked for: the markets outside events
+betRoutes.get('/bet/other', async c => c.json(await getGroup(viewerOf(c), DEFAULT_GROUP)))
+
+// Sections, and the order of markets and sections, on an event or in a group
 betRoutes.post('/bet/events/:id/sections', async c =>
-  c.json(createSection(viewerOf(c), id(c), readSectionTitle((await readBody(c)).title)), 201),
+  c.json(createSection(viewerOf(c), onEvent(id(c)), readSectionTitle((await readBody(c)).title)), 201),
 )
-betRoutes.post('/bet/other/sections', async c =>
-  c.json(createSection(viewerOf(c), null, readSectionTitle((await readBody(c)).title)), 201),
+betRoutes.post('/bet/groups/:id/sections', async c =>
+  c.json(createSection(viewerOf(c), inGroup(id(c)), readSectionTitle((await readBody(c)).title)), 201),
 )
 betRoutes.patch('/bet/sections/:id', async c => c.json(renameSection(viewerOf(c), id(c), readSectionTitle((await readBody(c)).title))))
 betRoutes.delete('/bet/sections/:id', c => {
@@ -205,18 +284,12 @@ betRoutes.delete('/bet/sections/:id', c => {
   return c.json({ ok: true })
 })
 betRoutes.put('/bet/events/:id/layout', async c => {
-  saveLayout(viewerOf(c), id(c), readLayout(await readBody(c)))
+  saveLayout(viewerOf(c), onEvent(id(c)), readLayout(await readBody(c)))
   return c.json({ ok: true })
 })
-betRoutes.put('/bet/other/layout', async c => {
-  saveLayout(viewerOf(c), null, readLayout(await readBody(c)))
+betRoutes.put('/bet/groups/:id/layout', async c => {
+  saveLayout(viewerOf(c), inGroup(id(c)), readLayout(await readBody(c)))
   return c.json({ ok: true })
-})
-
-// A market that isn't about an event; only admins
-betRoutes.post('/bet/markets', async c => {
-  const market = createMarket(viewerOf(c), null, readMarket(await readBody(c)))
-  return c.json(market, 201)
 })
 
 betRoutes.patch('/bet/markets/:id', async c => {

@@ -16,6 +16,8 @@ process.env.OIDC_USERINFO_URL ??= `${mockUrl}/api/oidc/userinfo`
 process.env.LLDAP_URL ??= mockUrl
 process.env.LLDAP_USERNAME ??= 'mock'
 process.env.LLDAP_PASSWORD ??= 'mock'
+// The bot reads the news and ESPN; only with --bots
+if (!process.argv.includes('--bots')) process.env.BOTS ??= 'off'
 // The site and TebBet (bet.tebonsma.no) on their own dev ports
 process.env.ALLOWED_ORIGINS ??= 'http://localhost:5173,http://localhost:5174'
 

@@ -5,6 +5,7 @@ import { db, transaction } from './db.ts'
 import type { Viewer } from './feed.ts'
 import { listGroupMembers } from './lldap.ts'
 import { getMembers, usernameOf } from './members.ts'
+import { describeRule, type Rule } from './bots/rules.ts'
 import {
   combine,
   DEFAULT_LIQUIDITY,
@@ -23,6 +24,9 @@ import {
 
 // TebBet (bet.tebonsma.no): members bet TEB coins on things that may happen at an event.
 // No real money is involved. Every member gets coins to start with and more every Monday.
+//
+// Markets that aren't about an event are in groups, like "Andre spill" or one a bot fills
+// (src/bots). Admins run the groups and the order of events and groups on the front page.
 //
 // A market is a question on an event with two or more outcomes, of which one comes true, or
 // on a multi market any number. The organizer of the event and admins open markets and
@@ -49,12 +53,13 @@ export type Side = 'over' | 'under'
 export type MarketState = 'open' | 'closed' | 'settled' | 'void'
 export type SelectionResult = 'pending' | 'won' | 'lost' | 'void'
 
-// event_id is the event's post, and missing for markets that aren't about an event, which
-// only admins open. It has no foreign key, because a market outlives its event: when the
-// event is deleted, the market is called off and the stakes paid back.
+// event_id is the event's post. It has no foreign key, because a market outlives its event:
+// when the event is deleted, the market is called off and the stakes paid back. Markets that
+// aren't about an event are in a group instead, which only admins run.
 const MARKET_COLUMNS = `
     id         TEXT PRIMARY KEY,
     event_id   TEXT,
+    group_id   TEXT REFERENCES bet_groups (id),
     -- The section it is under, if any, and its place there
     section_id TEXT REFERENCES bet_sections (id) ON DELETE SET NULL,
     position   INTEGER NOT NULL DEFAULT 0,
@@ -73,7 +78,13 @@ const MARKET_COLUMNS = `
     created_by TEXT NOT NULL,
     created_at TEXT NOT NULL,
     settled_by TEXT,
-    settled_at TEXT
+    settled_at TEXT,
+    -- Markets the bot decides: how (JSON, see src/bots/rules.ts), its own key so it makes each
+    -- one once, and what it found when it decided, with a link to it
+    rule       TEXT,
+    bot_key    TEXT,
+    note       TEXT,
+    note_url   TEXT
 `
 
 // A pick of one outcome, or on an over/under market a side of a line, which covers every number
@@ -95,11 +106,28 @@ const SELECTION_INDEXES = `
 `
 
 db.exec(`
-  -- Headings the organizer groups an event's markets under (event_id missing: the markets
-  -- outside events), in the order they set
+  -- Collections of markets that aren't about an event, like "Andre spill" or one a bot fills.
+  -- The id is in the address (/gruppe/landslaget).
+  CREATE TABLE IF NOT EXISTS bet_groups (
+    id         TEXT PRIMARY KEY,
+    title      TEXT NOT NULL,
+    -- The bot that fills it, if any
+    bot        TEXT,
+    created_at TEXT NOT NULL
+  );
+
+  -- Where admins have put events and groups on the front page; item is 'event:<post id>' or
+  -- 'group:<id>'. Events nobody has placed go by date among the others.
+  CREATE TABLE IF NOT EXISTS bet_front (
+    item     TEXT PRIMARY KEY,
+    position INTEGER NOT NULL
+  );
+
+  -- Headings the organizer groups an event's or a group's markets under, in the order they set
   CREATE TABLE IF NOT EXISTS bet_sections (
     id         TEXT PRIMARY KEY,
     event_id   TEXT,
+    group_id   TEXT,
     title      TEXT NOT NULL,
     position   INTEGER NOT NULL,
     created_at TEXT NOT NULL
@@ -215,6 +243,44 @@ if (!outcomeColumns.some(column => column.name === 'won')) {
   `)
 }
 
+// Groups and the bot came after the markets outside events, which all go in "Andre spill".
+// "Sponsorer" came with them, for markets about TEBONSMA's sponsors.
+export const DEFAULT_GROUP = 'andre-spill'
+const hasColumn = (table: string, name: string) =>
+  (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).some(column => column.name === name)
+if (!hasColumn('bet_sections', 'group_id')) db.exec('ALTER TABLE bet_sections ADD COLUMN group_id TEXT')
+if (!hasColumn('bet_markets', 'group_id')) {
+  db.exec(`
+    ALTER TABLE bet_markets ADD COLUMN group_id TEXT REFERENCES bet_groups (id);
+    ALTER TABLE bet_markets ADD COLUMN rule TEXT;
+    ALTER TABLE bet_markets ADD COLUMN bot_key TEXT;
+    ALTER TABLE bet_markets ADD COLUMN note TEXT;
+    ALTER TABLE bet_markets ADD COLUMN note_url TEXT;
+  `)
+  db.prepare("INSERT OR IGNORE INTO bet_groups (id, title, bot, created_at) VALUES ('sponsorer', 'Sponsorer', NULL, ?)").run(
+    new Date().toISOString(),
+  )
+}
+if (
+  db.prepare('SELECT 1 FROM bet_markets WHERE event_id IS NULL AND group_id IS NULL').get() ||
+  db.prepare('SELECT 1 FROM bet_sections WHERE event_id IS NULL AND group_id IS NULL').get()
+) {
+  transaction(() => {
+    db.prepare('INSERT OR IGNORE INTO bet_groups (id, title, bot, created_at) VALUES (?, ?, NULL, ?)').run(
+      DEFAULT_GROUP,
+      'Andre spill',
+      new Date().toISOString(),
+    )
+    db.prepare('UPDATE bet_markets SET group_id = ? WHERE event_id IS NULL AND group_id IS NULL').run(DEFAULT_GROUP)
+    db.prepare('UPDATE bet_sections SET group_id = ? WHERE event_id IS NULL AND group_id IS NULL').run(DEFAULT_GROUP)
+  })
+}
+db.exec(`
+  CREATE INDEX IF NOT EXISTS bet_markets_group ON bet_markets (group_id);
+  CREATE UNIQUE INDEX IF NOT EXISTS bet_markets_bot_key ON bet_markets (bot_key) WHERE bot_key IS NOT NULL;
+  CREATE INDEX IF NOT EXISTS bet_sections_group ON bet_sections (group_id);
+`)
+
 const now = () => new Date().toISOString()
 const bad = (message: string) => new HTTPException(400, { message })
 const toOdds = (hundredths: number) => hundredths / 100
@@ -304,6 +370,7 @@ interface EventRow {
 interface MarketRow {
   id: string
   event_id: string | null
+  group_id: string | null
   section_id: string | null
   question: string
   kind: MarketKind
@@ -315,7 +382,26 @@ interface MarketRow {
   result_value: number | null
   created_at: string
   settled_at: string | null
+  rule: string | null
+  bot_key: string | null
+  note: string | null
+  note_url: string | null
 }
+
+interface GroupRow {
+  id: string
+  title: string
+  bot: string | null
+  created_at: string
+}
+
+// Where markets live: on an event, or in a group of markets that aren't about one. Exactly one
+// of the two is set, so queries can match both columns with IS.
+export type Container = { eventId: string; groupId: null } | { eventId: null; groupId: string }
+export const onEvent = (eventId: string): Container => ({ eventId, groupId: null })
+export const inGroup = (groupId: string): Container => ({ eventId: null, groupId })
+const containerOf = (row: { event_id: string | null; group_id: string | null }) =>
+  row.event_id !== null ? onEvent(row.event_id) : inGroup(row.group_id!)
 
 interface OutcomeRow {
   id: string
@@ -346,15 +432,26 @@ function findMarket(id: string) {
   return row
 }
 
+function findGroup(id: string) {
+  const row = db.prepare('SELECT * FROM bet_groups WHERE id = ?').get(id) as GroupRow | undefined
+  if (!row) throw new HTTPException(404, { message: 'Gruppen finnes ikke' })
+  return row
+}
+
 const canManage = (viewer: Viewer, event: EventRow) => viewer.admin || event.author === viewer.username
 
-// Markets on an event are run by its organizer and admins, the other markets by admins
-function assertCanManage(viewer: Viewer, eventId: string | null) {
-  if (eventId === null) {
-    if (!viewer.admin) throw new HTTPException(403, { message: 'Bare administratorer kan styre spill utenom arrangementer' })
+const assertAdmin = (viewer: Viewer) => {
+  if (!viewer.admin) throw new HTTPException(403, { message: 'Bare administratorer kan styre spill utenom arrangementer' })
+}
+
+// Markets on an event are run by its organizer and admins, the groups by admins
+function assertCanManage(viewer: Viewer, container: Container) {
+  if (container.groupId !== null) {
+    findGroup(container.groupId)
+    assertAdmin(viewer)
     return null
   }
-  const event = findEvent(eventId)
+  const event = findEvent(container.eventId)
   if (!canManage(viewer, event)) {
     throw new HTTPException(403, { message: 'Bare arrangøren og administratorer kan styre spillene' })
   }
@@ -425,6 +522,7 @@ const excludedFrom = (marketId: string) =>
 
 function toMarket(market: MarketRow, viewer: Viewer) {
   const outcomes = outcomesOf(market.id)
+  const rule = market.rule ? (JSON.parse(market.rule) as Rule) : null
   const current = pricesOf(market, outcomes)
   const mine = db
     .prepare(
@@ -441,8 +539,9 @@ function toMarket(market: MarketRow, viewer: Viewer) {
 
   return {
     id: market.id,
-    // Missing when the market isn't about an event
+    // Missing when the market isn't about an event; then it is in a group
     eventId: market.event_id,
+    groupId: market.group_id,
     // Missing when it is under no section
     sectionId: market.section_id,
     question: market.question,
@@ -478,6 +577,10 @@ function toMarket(market: MarketRow, viewer: Viewer) {
     // The viewer is kept out of this market
     blocked: isExcluded(market.id, viewer.username),
     excluded: excludedFrom(market.id),
+    // The bot decides it: how, in words, and what it found when it did
+    autoRule: rule && describeRule(rule),
+    note: market.note,
+    noteUrl: market.note_url,
   }
 }
 
@@ -486,12 +589,11 @@ export type Market = ReturnType<typeof toMarket>
 const marketsOf = (eventId: string) =>
   db.prepare('SELECT * FROM bet_markets WHERE event_id = ? ORDER BY position, created_at').all(eventId) as unknown as MarketRow[]
 
-// The sections of an event, or of the markets outside events (null), in order
-const sectionsOf = (eventId: string | null) =>
-  db.prepare('SELECT id, title FROM bet_sections WHERE event_id IS ? ORDER BY position, created_at').all(eventId) as {
-    id: string
-    title: string
-  }[]
+// The sections of an event or a group, in order
+const sectionsOf = (container: Container) =>
+  db
+    .prepare('SELECT id, title FROM bet_sections WHERE event_id IS ? AND group_id IS ? ORDER BY position, created_at')
+    .all(container.eventId, container.groupId) as { id: string; title: string }[]
 
 async function toEvents(rows: EventRow[], viewer: Viewer) {
   const members = await getMembers(rows.map(row => row.author))
@@ -507,7 +609,7 @@ async function toEvents(rows: EventRow[], viewer: Viewer) {
       betting: row.betting === 1,
       organizer: members.get(row.author)!,
       canManage: manage,
-      sections: sectionsOf(row.id),
+      sections: sectionsOf(onEvent(row.id)),
       markets: marketsOf(row.id).map(market => toMarket(market, viewer)),
     }
   })
@@ -577,21 +679,103 @@ export async function getEvent(viewer: Viewer, id: string) {
   return { ...event, bets: await latestBets('m.event_id = ?', id) }
 }
 
-// The markets admins open that aren't about an event: the undecided ones and those decided
-// lately, the ones closing first at the top
-export async function listOther(viewer: Viewer) {
+// A group with its undecided markets and those decided lately, in the admins' order
+function toGroup(group: GroupRow, viewer: Viewer) {
   const rows = db
     .prepare(
-      `SELECT * FROM bet_markets WHERE event_id IS NULL AND (status = 'open' OR settled_at >= ?)
+      `SELECT * FROM bet_markets WHERE group_id = ? AND (status = 'open' OR settled_at >= ?)
        ORDER BY position, created_at`,
     )
-    .all(recently()) as unknown as MarketRow[]
+    .all(group.id, recently()) as unknown as MarketRow[]
   return {
+    id: group.id,
+    title: group.title,
+    // The bot that fills it, if any
+    bot: group.bot,
     canManage: viewer.admin,
-    sections: sectionsOf(null),
+    sections: sectionsOf(inGroup(group.id)),
     markets: rows.map(market => toMarket(market, viewer)),
-    bets: await latestBets('m.event_id IS NULL'),
   }
+}
+
+// Every group, and where admins have put events and groups on the front page
+export function listGroups(viewer: Viewer) {
+  const groups = db.prepare('SELECT * FROM bet_groups ORDER BY created_at').all() as unknown as GroupRow[]
+  const front = db.prepare('SELECT item FROM bet_front ORDER BY position').all() as { item: string }[]
+  return { canManage: viewer.admin, front: front.map(row => row.item), groups: groups.map(group => toGroup(group, viewer)) }
+}
+
+// One group with the latest bets in it
+export async function getGroup(viewer: Viewer, id: string) {
+  return { ...toGroup(findGroup(id), viewer), bets: await latestBets('m.group_id = ?', id) }
+}
+
+// Lowercase letters, digits and dashes, from the title: "Trondheim by" is trondheim-by
+function slugOf(title: string) {
+  const slug = title
+    .toLowerCase()
+    .replace(/æ/g, 'ae')
+    .replace(/ø/g, 'o')
+    .replace(/å/g, 'a')
+    .normalize('NFKD')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40)
+    .replace(/-+$/, '')
+  return slug || 'gruppe'
+}
+
+export function createGroup(viewer: Viewer, title: string) {
+  assertAdmin(viewer)
+  const base = slugOf(title)
+  let id = base
+  for (let n = 2; db.prepare('SELECT 1 FROM bet_groups WHERE id = ?').get(id); n++) id = `${base}-${n}`
+  db.prepare('INSERT INTO bet_groups (id, title, bot, created_at) VALUES (?, ?, NULL, ?)').run(id, title, now())
+  return toGroup(findGroup(id), viewer)
+}
+
+// For a bot: its group, made the first time
+export function ensureBotGroup(id: string, title: string, bot: string) {
+  db.prepare('INSERT OR IGNORE INTO bet_groups (id, title, bot, created_at) VALUES (?, ?, ?, ?)').run(id, title, bot, now())
+}
+
+export function renameGroup(viewer: Viewer, id: string, title: string) {
+  assertAdmin(viewer)
+  findGroup(id)
+  db.prepare('UPDATE bet_groups SET title = ? WHERE id = ?').run(title, id)
+  return toGroup(findGroup(id), viewer)
+}
+
+// Only a group that has never had markets, and that no bot fills, can go
+export function deleteGroup(viewer: Viewer, id: string) {
+  assertAdmin(viewer)
+  const group = findGroup(id)
+  if (group.bot) throw bad('Gruppen fylles av boten og kan ikke slettes')
+  if (db.prepare('SELECT 1 FROM bet_markets WHERE group_id = ?').get(id)) {
+    throw bad('Gruppen har hatt spill og kan ikke slettes. Gi den heller et nytt navn.')
+  }
+  transaction(() => {
+    db.prepare('DELETE FROM bet_sections WHERE group_id = ?').run(id)
+    db.prepare('DELETE FROM bet_front WHERE item = ?').run(`group:${id}`)
+    db.prepare('DELETE FROM bet_groups WHERE id = ?').run(id)
+  })
+}
+
+// The order of events and groups on the front page, from the top. Items left out go by date
+// (events) or after the rest (groups).
+export function saveFront(viewer: Viewer, items: string[]) {
+  assertAdmin(viewer)
+  if (new Set(items).size !== items.length) throw bad('Noe står to ganger')
+  for (const item of items) {
+    const [kind, id] = [item.slice(0, item.indexOf(':')), item.slice(item.indexOf(':') + 1)]
+    if (kind === 'event') findEvent(id)
+    else if (kind === 'group') findGroup(id)
+    else throw bad('Ugyldig rekkefølge')
+  }
+  transaction(() => {
+    db.prepare('DELETE FROM bet_front').run()
+    items.forEach((item, position) => db.prepare('INSERT INTO bet_front (item, position) VALUES (?, ?)').run(item, position))
+  })
 }
 
 export const hasOpenMarkets = (eventId: string) =>
@@ -638,11 +822,15 @@ export interface MarketInput {
   excluded: string[]
   // The section to put it under, at the end; missing or null for none
   sectionId?: string | null
+  // For the bot: how it decides the market, its key for it, and over/under opening chances
+  // of its own (one per number from the lowest to the highest)
+  rule?: Rule
+  botKey?: string
+  chances?: number[]
 }
 
-// eventId is null for a market that isn't about an event, which only admins open
-export function createMarket(viewer: Viewer, eventId: string | null, input: MarketInput) {
-  const event = assertCanManage(viewer, eventId)
+export function createMarket(viewer: Viewer, container: Container, input: MarketInput) {
+  const event = assertCanManage(viewer, container)
   const time = now()
   if (event && !event.betting) throw bad('Arrangøren har slått av spill på dette arrangementet')
   if (event?.ends_at && event.ends_at <= time) throw bad('Arrangementet er over')
@@ -655,14 +843,15 @@ export function createMarket(viewer: Viewer, eventId: string | null, input: Mark
 
   const excluded = usernamesOf(input.excluded)
   const sectionId = input.sectionId ?? null
-  if (sectionId !== null) findSection(sectionId, eventId)
+  if (sectionId !== null) findSection(sectionId, container)
   const overUnder = input.kind === 'overunder'
   // Over/under has an outcome per number; the lowest one stands for it or fewer, the highest
   // for it or more
   const lowest = input.lowest ?? 0
   const highest = input.highest!
+  if (input.chances && input.chances.length !== highest - lowest + 1) throw bad('Feil antall sjanser')
   const outcomes = overUnder
-    ? countProbabilities(input.line!, lowest, highest, input.spread ?? 'medium').map((chance, i) => {
+    ? (input.chances ?? countProbabilities(input.line!, lowest, highest, input.spread ?? 'medium')).map((chance, i) => {
         const value = lowest + i
         const label =
           value === highest ? `${value} eller mer` : value === lowest && lowest > 0 ? `${value} eller færre` : String(value)
@@ -676,13 +865,15 @@ export function createMarket(viewer: Viewer, eventId: string | null, input: Mark
   const id = randomUUID()
   transaction(() => {
     db.prepare(
-      `INSERT INTO bet_markets (id, event_id, section_id, position, question, kind, liquidity, line, closes_at, created_by, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO bet_markets (id, event_id, group_id, section_id, position, question, kind, liquidity, line, closes_at,
+         created_by, created_at, rule, bot_key)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       id,
-      eventId,
+      container.eventId,
+      container.groupId,
       sectionId,
-      nextMarketPosition(eventId, sectionId),
+      nextMarketPosition(container, sectionId),
       input.question,
       input.kind,
       DEFAULT_LIQUIDITY,
@@ -690,6 +881,8 @@ export function createMarket(viewer: Viewer, eventId: string | null, input: Mark
       closesAt,
       viewer.username,
       time,
+      input.rule ? JSON.stringify(input.rule) : null,
+      input.botKey ?? null,
     )
     outcomes.forEach((outcome, position) => {
       db.prepare(
@@ -711,7 +904,7 @@ export function createMarket(viewer: Viewer, eventId: string | null, input: Mark
 
 function managedMarket(viewer: Viewer, id: string) {
   const market = findMarket(id)
-  assertCanManage(viewer, market.event_id)
+  assertCanManage(viewer, containerOf(market))
   return market
 }
 
@@ -831,16 +1024,40 @@ function settleSlip(slipId: string) {
   }
 }
 
+// What the bot found when it decided a market, with a link to it
+export interface Finding {
+  note: string
+  url?: string
+}
+
 // Deciding a market also stops the betting on it, so it stays closed if it is reopened.
 // winners are the outcomes that came true; winner_id is the one, except on a multi market.
-function decide(viewer: Viewer | null, id: string, status: 'settled' | 'void', winners: string[], value: number | null = null) {
+function decide(
+  viewer: Viewer | null,
+  id: string,
+  status: 'settled' | 'void',
+  winners: string[],
+  value: number | null = null,
+  finding: Finding | null = null,
+) {
   const time = now()
   const multi = findMarket(id).kind === 'multi'
   db.prepare(
     `UPDATE bet_markets SET status = ?, winner_id = ?, result_value = ?, settled_by = ?, settled_at = ?,
-       closes_at = CASE WHEN closes_at IS NULL OR closes_at > ? THEN ? ELSE closes_at END
+       closes_at = CASE WHEN closes_at IS NULL OR closes_at > ? THEN ? ELSE closes_at END, note = ?, note_url = ?
      WHERE id = ?`,
-  ).run(status, multi ? null : (winners[0] ?? null), value, viewer?.username ?? null, time, time, time, id)
+  ).run(
+    status,
+    multi ? null : (winners[0] ?? null),
+    value,
+    viewer?.username ?? null,
+    time,
+    time,
+    time,
+    finding?.note ?? null,
+    finding?.url ?? null,
+    id,
+  )
   db.prepare('UPDATE bet_outcomes SET won = 0 WHERE market_id = ?').run(id)
   for (const winner of winners) db.prepare('UPDATE bet_outcomes SET won = 1 WHERE id = ?').run(winner)
   settleSlipsOn(id)
@@ -850,7 +1067,7 @@ function decide(viewer: Viewer | null, id: string, status: 'settled' | 'void', w
 // none), or for over/under the number it ended on
 export type Decision = { outcomeId: string } | { outcomeIds: string[] } | { value: number }
 
-export function settleMarket(viewer: Viewer, id: string, decision: Decision) {
+export function settleMarket(viewer: Viewer, id: string, decision: Decision, finding: Finding | null = null) {
   const market = managedMarket(viewer, id)
   if (market.status !== 'open') throw bad('Spillet er allerede avgjort. Gjør om avgjørelsen først.')
 
@@ -875,27 +1092,30 @@ export function settleMarket(viewer: Viewer, id: string, decision: Decision) {
     if (!isOutcome(decision.outcomeId)) throw bad('Ukjent utfall')
     winners = [decision.outcomeId]
   }
-  transaction(() => decide(viewer, id, 'settled', winners, value))
+  transaction(() => decide(viewer, id, 'settled', winners, value, finding))
   return toMarket(findMarket(id), viewer)
 }
 
 // Calls the market off: every stake on it is paid back, and in a combination it counts as 1,00
-export function voidMarket(viewer: Viewer, id: string) {
+export function voidMarket(viewer: Viewer, id: string, finding: Finding | null = null) {
   const market = managedMarket(viewer, id)
   if (market.status !== 'open') throw bad('Spillet er allerede avgjort. Gjør om avgjørelsen først.')
-  transaction(() => decide(viewer, id, 'void', []))
+  transaction(() => decide(viewer, id, 'void', [], null, finding))
   return toMarket(findMarket(id), viewer)
 }
 
 // Takes a decision back, for when the wrong outcome was picked. What it paid out is taken
-// back from the members again, which can leave someone below zero.
+// back from the members again, which can leave someone below zero. The bot doesn't decide a
+// market again after that: it is up to whoever runs it.
 export function reopenMarket(viewer: Viewer, id: string) {
   const market = managedMarket(viewer, id)
   if (market.status === 'open') throw bad('Spillet er ikke avgjort')
   transaction(() => {
     db.prepare(
-      "UPDATE bet_markets SET status = 'open', winner_id = NULL, result_value = NULL, settled_by = NULL, settled_at = NULL WHERE id = ?",
-    ).run(id)
+      `UPDATE bet_markets SET status = 'open', winner_id = NULL, result_value = NULL, settled_by = NULL, settled_at = NULL,
+         rule = NULL, note = ?, note_url = NULL
+       WHERE id = ?`,
+    ).run(market.rule ? 'Avgjørelsen fra boten er gjort om, så spillet avgjøres nå for hånd.' : null, id)
     db.prepare('UPDATE bet_outcomes SET won = 0 WHERE market_id = ?').run(id)
     settleSlipsOn(id)
   })
@@ -923,31 +1143,33 @@ export function voidEventMarkets(eventId: string) {
 
 // --- Sections ---
 
-function findSection(id: string, eventId?: string | null) {
-  const row = db.prepare('SELECT id, event_id FROM bet_sections WHERE id = ?').get(id) as
-    | { id: string; event_id: string | null }
+function findSection(id: string, container?: Container) {
+  const row = db.prepare('SELECT id, event_id, group_id FROM bet_sections WHERE id = ?').get(id) as
+    | { id: string; event_id: string | null; group_id: string | null }
     | undefined
-  if (!row || (eventId !== undefined && row.event_id !== eventId)) throw new HTTPException(404, { message: 'Seksjonen finnes ikke' })
+  if (!row || (container && (row.event_id !== container.eventId || row.group_id !== container.groupId))) {
+    throw new HTTPException(404, { message: 'Seksjonen finnes ikke' })
+  }
   return row
 }
 
-const nextMarketPosition = (eventId: string | null, sectionId: string | null) =>
+const nextMarketPosition = (container: Container, sectionId: string | null) =>
   (
     db
-      .prepare('SELECT COALESCE(MAX(position), -1) + 1 AS n FROM bet_markets WHERE event_id IS ? AND section_id IS ?')
-      .get(eventId, sectionId) as { n: number }
+      .prepare('SELECT COALESCE(MAX(position), -1) + 1 AS n FROM bet_markets WHERE event_id IS ? AND group_id IS ? AND section_id IS ?')
+      .get(container.eventId, container.groupId, sectionId) as { n: number }
   ).n
 
-// eventId null: a section for the markets outside events, which admins run
-export function createSection(viewer: Viewer, eventId: string | null, title: string) {
-  assertCanManage(viewer, eventId)
+export function createSection(viewer: Viewer, container: Container, title: string) {
+  assertCanManage(viewer, container)
   const { n } = db
-    .prepare('SELECT COALESCE(MAX(position), -1) + 1 AS n FROM bet_sections WHERE event_id IS ?')
-    .get(eventId) as { n: number }
+    .prepare('SELECT COALESCE(MAX(position), -1) + 1 AS n FROM bet_sections WHERE event_id IS ? AND group_id IS ?')
+    .get(container.eventId, container.groupId) as { n: number }
   const id = randomUUID()
-  db.prepare('INSERT INTO bet_sections (id, event_id, title, position, created_at) VALUES (?, ?, ?, ?, ?)').run(
+  db.prepare('INSERT INTO bet_sections (id, event_id, group_id, title, position, created_at) VALUES (?, ?, ?, ?, ?, ?)').run(
     id,
-    eventId,
+    container.eventId,
+    container.groupId,
     title,
     n,
     now(),
@@ -955,9 +1177,17 @@ export function createSection(viewer: Viewer, eventId: string | null, title: str
   return { id, title }
 }
 
+// The section with this title, made if there is none; for the bot and imports
+export function sectionNamed(viewer: Viewer, container: Container, title: string) {
+  const row = db
+    .prepare('SELECT id, title FROM bet_sections WHERE event_id IS ? AND group_id IS ? AND title = ?')
+    .get(container.eventId, container.groupId, title) as { id: string; title: string } | undefined
+  return row ?? createSection(viewer, container, title)
+}
+
 export function renameSection(viewer: Viewer, id: string, title: string) {
   const section = findSection(id)
-  assertCanManage(viewer, section.event_id)
+  assertCanManage(viewer, containerOf(section))
   db.prepare('UPDATE bet_sections SET title = ? WHERE id = ?').run(title, id)
   return { id, title }
 }
@@ -965,12 +1195,13 @@ export function renameSection(viewer: Viewer, id: string, title: string) {
 // Its markets stay, under no section, after the ones already there
 export function deleteSection(viewer: Viewer, id: string) {
   const section = findSection(id)
-  assertCanManage(viewer, section.event_id)
+  const container = containerOf(section)
+  assertCanManage(viewer, container)
   transaction(() => {
     const markets = db.prepare('SELECT id FROM bet_markets WHERE section_id = ? ORDER BY position, created_at').all(id) as {
       id: string
     }[]
-    let position = nextMarketPosition(section.event_id, null)
+    let position = nextMarketPosition(container, null)
     for (const market of markets) {
       db.prepare('UPDATE bet_markets SET section_id = NULL, position = ? WHERE id = ?').run(position++, market.id)
     }
@@ -987,16 +1218,19 @@ export interface LayoutGroup {
 // Puts markets and sections in the given order. The sections come in the order of their
 // groups. Markets and sections left out keep their place, so a page that only shows some
 // of them can still reorder those.
-export function saveLayout(viewer: Viewer, eventId: string | null, groups: LayoutGroup[]) {
-  assertCanManage(viewer, eventId)
+export function saveLayout(viewer: Viewer, container: Container, groups: LayoutGroup[]) {
+  assertCanManage(viewer, container)
   const marketIds = groups.flatMap(group => group.marketIds)
   const sectionIds = groups.flatMap(group => (group.sectionId ? [group.sectionId] : []))
   if (new Set(marketIds).size !== marketIds.length || new Set(sectionIds).size !== sectionIds.length) {
     throw bad('Et spill eller en seksjon står to ganger')
   }
-  for (const sectionId of sectionIds) findSection(sectionId, eventId)
+  for (const sectionId of sectionIds) findSection(sectionId, container)
   for (const marketId of marketIds) {
-    if (findMarket(marketId).event_id !== eventId) throw new HTTPException(404, { message: 'Spillet finnes ikke' })
+    const market = findMarket(marketId)
+    if (market.event_id !== container.eventId || market.group_id !== container.groupId) {
+      throw new HTTPException(404, { message: 'Spillet finnes ikke' })
+    }
   }
 
   transaction(() => {
@@ -1131,6 +1365,8 @@ interface LegRow extends LegResultRow {
   question: string
   event_id: string | null
   event_title: string | null
+  group_id: string | null
+  group_title: string | null
   label: string | null
 }
 
@@ -1143,11 +1379,12 @@ function legsOf(slipIds: string[]) {
   return db
     .prepare(
       `SELECT s.slip_id, s.market_id, s.outcome_id, s.side, s.line, s.odds, m.question, m.status, o.won,
-         m.result_value, m.event_id, e.title AS event_title, o.label
+         m.result_value, m.event_id, e.title AS event_title, m.group_id, g.title AS group_title, o.label
        FROM bet_selections s
        JOIN bet_markets m ON m.id = s.market_id
        LEFT JOIN bet_outcomes o ON o.id = s.outcome_id
        LEFT JOIN events e ON e.post_id = m.event_id
+       LEFT JOIN bet_groups g ON g.id = m.group_id
        WHERE s.slip_id IN (${slipIds.map(() => '?').join(', ')})
        ORDER BY m.created_at`,
     )
@@ -1172,6 +1409,9 @@ function toSlips(rows: SlipRow[]) {
         eventId: leg.event_id,
         // Missing for markets that aren't about an event, or when the event has been deleted
         eventTitle: leg.event_title,
+        // Or the group it is in
+        groupId: leg.group_id,
+        groupTitle: leg.group_title,
         question: leg.question,
         outcomeId: leg.outcome_id,
         label: labelOf(leg),
@@ -1237,7 +1477,7 @@ export function listLedger(viewer: Viewer) {
             id: row.slip_id,
             selections: legs
               .filter(leg => leg.slip_id === row.slip_id)
-              .map(leg => ({ question: leg.question, label: labelOf(leg), eventTitle: leg.event_title })),
+              .map(leg => ({ question: leg.question, label: labelOf(leg), eventTitle: leg.event_title ?? leg.group_title })),
           }
         : null,
     }

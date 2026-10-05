@@ -1,4 +1,15 @@
-import { closeMarket, createMarket, ensureAccount, getEvent, listOther, placeSlips, settleMarket } from '../src/bets.ts'
+import {
+  closeMarket,
+  createGroup,
+  createMarket,
+  ensureAccount,
+  getEvent,
+  inGroup,
+  listGroups,
+  onEvent,
+  placeSlips,
+  settleMarket,
+} from '../src/bets.ts'
 import { db } from '../src/db.ts'
 import { createPost, type Viewer } from '../src/feed.ts'
 import { getMembers } from '../src/members.ts'
@@ -46,7 +57,7 @@ const choice = (question: string, outcomes: [string, number][]) => ({
 
 // Plays at whatever the odds are right now
 async function play(viewer: Viewer, stake: number, outcomeIds: string[]) {
-  const markets = [...(await listOther(viewer)).markets]
+  const markets = listGroups(viewer).groups.flatMap(group => group.markets)
   const events = db.prepare('SELECT DISTINCT event_id FROM bet_markets WHERE event_id IS NOT NULL').all() as { event_id: string }[]
   for (const { event_id } of events) markets.push(...(await getEvent(viewer, event_id)).markets)
   const odds = new Map(markets.flatMap(market => market.outcomes.map(outcome => [outcome.id, outcome.odds] as const)))
@@ -63,21 +74,21 @@ async function playLine(viewer: Viewer, stake: number, marketId: string, side: '
 }
 
 const party = await event('Høstfest', 'Festlokalet', 24 * 6, 6)
-const nachspiel = createMarket(admin, party, yesNo('Blir det nachspiel?', 140, 280))
+const nachspiel = createMarket(admin, onEvent(party), yesNo('Blir det nachspiel?', 140, 280))
 const firstHome = createMarket(
   admin,
-  party,
+  onEvent(party),
   choice('Hvem går hjem først?', [
     ['Dev Bruker', 300],
     ['Admin Bruker', 250],
     ['Noen andre', 180],
   ]),
 )
-createMarket(admin, party, yesNo('Klager naboene før kl. 01?', 350, 125))
+createMarket(admin, onEvent(party), yesNo('Klager naboene før kl. 01?', 350, 125))
 // About Dev Bruker, so they may not play on it
 const [devMember] = (await getMembers(['dev'])).values()
-createMarket(admin, party, yesNo('Sovner Dev Bruker på sofaen?', 220, 165, [devMember.id]))
-const beers = createMarket(admin, party, {
+createMarket(admin, onEvent(party), yesNo('Sovner Dev Bruker på sofaen?', 220, 165, [devMember.id]))
+const beers = createMarket(admin, onEvent(party), {
   question: 'Hvor mange øl drikker Dev Bruker?',
   kind: 'overunder',
   outcomes: [],
@@ -87,7 +98,7 @@ const beers = createMarket(admin, party, {
   excluded: [devMember.id],
 })
 // Two or three of them will end up cleaning
-const crew = createMarket(admin, party, {
+const crew = createMarket(admin, onEvent(party), {
   question: 'Hvem havner på ryddelaget?',
   kind: 'multi',
   outcomes: ['Admin Bruker', 'Dev Bruker', 'Kari Nordmann', 'Ola Nordmann'].map(label => ({ label, odds: 400 })),
@@ -98,24 +109,26 @@ const crew = createMarket(admin, party, {
 const quiz = await event('Quizkveld', 'Stua', 50, 3)
 const winner = createMarket(
   admin,
-  quiz,
+  onEvent(quiz),
   choice('Hvilket lag vinner?', [
     ['Lag 1', 220],
     ['Lag 2', 260],
     ['Lag 3', 400],
   ]),
 )
-const rematch = createMarket(admin, quiz, yesNo('Blir det omkamp?', 400, 120))
+const rematch = createMarket(admin, onEvent(quiz), yesNo('Blir det omkamp?', 400, 120))
 
 // Not about an event: only admins open these
-const exam = createMarket(admin, null, {
+const other = createGroup(admin, 'Andre spill')
+createGroup(admin, 'Sponsorer')
+const exam = createMarket(admin, inGroup(other.id), {
   ...yesNo('Står alle eksamen i høst?', 260, 145),
   closesAt: at(24 * 10),
 })
 
 const grill = await event('Grillkveld', 'Bakgården', 2, 4)
-const burnt = createMarket(admin, grill, yesNo('Blir pølsene brent?', 150, 240))
-const rain = createMarket(admin, grill, yesNo('Kommer det regn?', 300, 135))
+const burnt = createMarket(admin, onEvent(grill), yesNo('Blir pølsene brent?', 150, 240))
+const rain = createMarket(admin, onEvent(grill), yesNo('Kommer det regn?', 300, 135))
 
 await play(dev, 100, [nachspiel.outcomes[0].id])
 await play(admin, 50, [nachspiel.outcomes[1].id])

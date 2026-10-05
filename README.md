@@ -91,7 +91,9 @@ ten of which several can (multi, like who ends up on the cleaning crew; every ri
 or over/under, where members pick a line on a count (like 4,5 beers) and bet over or under it. Markets on an event are run
 (opened, closed, decided, called off, reopened) by the event's organizer and admins; the
 organizer can turn betting off for an event (`event.betting` on the post), which hides it from
-TebBet. Admins can also open markets that aren't about an event. Whoever opens a market can
+TebBet. Markets that aren't about an event are in **groups**, like "Andre spill" and
+"Sponsorer", which admins make, rename and run; admins also set the order of events and groups
+on the front page. The group "Landslaget" is filled by the bot (below). Whoever opens a market can
 keep members out of it, typically the one it is about: they see it but can't play on it, and
 bets they placed before stand. A **slip** is one bet:
 a stake on one outcome (single), or on outcomes in several markets that must all happen
@@ -105,14 +107,18 @@ paid back out again.
 | GET | `/bet/me` | Own balance, coins in play and the next Monday |
 | GET | `/bet/events` | Coming events and recent results, with their markets and current odds |
 | GET | `/bet/events/:id` | One event, every market on it and the latest bets |
-| GET | `/bet/other` | The markets that aren't about an event, and their latest bets |
+| GET | `/bet/groups` | Every group with its markets, and `front`: where admins have put events and groups on the front page (`event:<id>`, `group:<id>`) |
+| GET | `/bet/groups/:id` | One group, its markets and the latest bets (`/bet/other` is "Andre spill", for the site before groups) |
+| POST, PATCH, DELETE | `/bet/groups`, `/bet/groups/:id` | Make a group (`{ title }`, its id comes from the title), rename it, or delete one that has never had markets and no bot fills (admins) |
+| PUT | `/bet/front` | The order of the front page from the top: `{ items: ['group:landslaget', 'event:<id>', …] }`. Events left out go by date among the other events, groups at the end |
 | GET | `/bet/members` | The members (`MEMBER_GROUP`), to keep out of a market or add as its outcomes |
 | POST | `/bet/events/:id/markets` | Open a market: `{ question, kind, outcomes: [{ label, odds }], closesAt, excluded }` |
-| POST | `/bet/markets` | Open a market that isn't about an event (admins), same body |
+| POST | `/bet/groups/:id/markets` | Open a market in a group (admins), same body |
+| POST | `/bet/groups/:id/import` | Import up to 30 markets (admins), all checked before any is made: `{ markets: [{ …a new market, section }] }`. `excluded` may name members by their display name |
 | PATCH | `/bet/markets/:id` | Change `question`, `closesAt` or `excluded` of an undecided market |
-| POST | `/bet/events/:id/sections`, `/bet/other/sections` | Add a section heading: `{ title }` |
+| POST | `/bet/events/:id/sections`, `/bet/groups/:id/sections` | Add a section heading: `{ title }` |
 | PATCH, DELETE | `/bet/sections/:id` | Rename a section (`{ title }`), or remove it; its markets stay, under no section |
-| PUT | `/bet/events/:id/layout`, `/bet/other/layout` | Order sections and markets: `{ groups: [{ sectionId, marketIds }] }`, `sectionId` null for no section |
+| PUT | `/bet/events/:id/layout`, `/bet/groups/:id/layout` | Order sections and markets: `{ groups: [{ sectionId, marketIds }] }`, `sectionId` null for no section |
 | POST | `/bet/markets/:id/close` | Stop betting now |
 | POST | `/bet/markets/:id/settle` | Decide it: `{ outcomeId }`, `{ outcomeIds }` (every outcome that came true, maybe none) for multi, or `{ value }` for over/under |
 | POST | `/bet/markets/:id/void` | Call it off and pay the stakes back |
@@ -158,6 +164,18 @@ the way counts and waits are: twice the line is as likely as half of it. `spread
 it is (0,3, 0,6 or 1,0 on a log scale). Lines lie halfway between whole numbers, so a result is
 always over or under.
 
+**The bot** (`src/bots`) runs inside the API every ten minutes, as `tebbet-bot`, an admin that
+never plays. It fills the group **Landslaget** with Norway's men's matches from ESPN's open but
+undocumented API (no key). It opens a winner, total goals, Norway's goals and "Does Haaland
+score?" market per match when the bookmaker's odds (DraftKings, in the match summary at ESPN)
+show up, at most two weeks ahead, turned into chances without the bookmaker's margin. Without
+them three days before kickoff it opens with odds from the Elo ratings at eloratings.net.
+Betting stops at kickoff and follows the match if it is moved. Goals are those of normal time;
+a cancelled match is called off, and so is the scorer market if the player doesn't play. What
+the bot found is kept with the market (`note`, `noteUrl`) and shown with it, and so is how it
+decides (`autoRule`). If an admin reopens a market the bot decided, the bot leaves it to them.
+`BOTS=off` keeps the bot from running.
+
 ### Game scoreboards
 
 Each game has its own scoreboard, and each member has one entry per game: their best score
@@ -196,6 +214,8 @@ This stops casual cheating, not a determined player. To add a game, give it an e
 | `DATA_DIR` | `./data` (`/app/data` in Docker) | Folder for the SQLite database |
 | `ADMIN_GROUP` | `lldap_admin` | Group whose members moderate the feed |
 | `MEMBER_GROUP` | `medlemmer` | Group of the members of TEBONSMA, for TebBet's list of members |
+| `BOTS` | on | `off` keeps TebBet's bot from running (it is off in `npm run dev:mock` unless started with `--bots`) |
+| `BOT_ODDS_DAYS`, `BOT_ELO_DAYS` | `14`, `3` | Days before kickoff the bot looks for bookmaker odds, and opens with Elo odds without them. Larger values let you try it out |
 
 Put the credentials in `.env` (see `.env.example`). It is git-ignored and should never be
 committed.
@@ -267,7 +287,7 @@ as well, and for TebBet in the tebbet repo (it runs on port 5174; both ports are
 a few bets: one coming up next week (with an over/under market Dev Bruker is kept out of and
 a multi market), one
 in two days, and one that is over, with a decided market and one waiting for its result. There
-is also a market that isn't about an event. To call the API directly, the access token is `mock-access.<username>`:
+is also a market in the group "Andre spill". To call the API directly, the access token is `mock-access.<username>`:
 
 ```bash
 curl -H "Authorization: Bearer mock-access.dev" http://localhost:8787/me
