@@ -20,6 +20,8 @@ import { composeFrom, deleteDraft, readCompose, saveDraft, type ComposeMode } fr
 import { cancelSend, sendMail } from './mail/outbox.ts'
 import { deleteUploads, MAX_UPLOAD_BYTES, readUpload, saveUpload } from './mail/uploads.ts'
 import { listMembers } from './members.ts'
+import { getAutoReply, readAutoReply, saveAutoReply } from './mail/autoReply.ts'
+import { readUntil, releaseDue, snoozeMessages } from './mail/snooze.ts'
 import { createLabel, deleteLabel, listLabels, updateLabel } from './mail/labels.ts'
 import {
   accountFor,
@@ -54,7 +56,10 @@ mailRoutes.use('/mail/outbox/*', jsonLimit)
 const ownerOf = (c: Context<Env>) => c.get('caller').username
 
 mailRoutes.get('/mail/folders', requireCaller, async c => {
-  const mailbox = await openMailbox(await accountOf(c))
+  const account = await accountOf(c)
+  // Snoozed mails whose time is up come back to the inbox first, so the counts are right
+  await releaseDue(account, ownerOf(c)).catch(err => console.error('Bringing back snoozed mail failed:', err))
+  const mailbox = await openMailbox(account)
   return c.json({ folders: folderViews(mailbox), labels: listLabels(ownerOf(c)) })
 })
 
@@ -136,6 +141,14 @@ mailRoutes.post('/mail/messages/move', requireCaller, async c => {
   if (body.restore === true) return c.json({ moved: await restoreMessages(account, ownerOf(c), ids) })
   if (typeof body.folder !== 'string') throw bad('Velg en mappe')
   return c.json({ moved: await moveMessages(account, ownerOf(c), ids, body.folder) })
+})
+
+// With null, snoozing is taken off and the mails go back to the inbox
+mailRoutes.post('/mail/messages/snooze', requireCaller, async c => {
+  const body = await readBody(c)
+  const ids = readIds(body.ids)
+  if (body.until === undefined) throw bad('Velg når mailen skal komme tilbake')
+  return c.json({ moved: await snoozeMessages(await accountOf(c), ownerOf(c), ids, readUntil(body.until)) })
 })
 
 mailRoutes.post('/mail/messages/delete', requireCaller, async c => {
@@ -257,3 +270,11 @@ mailRoutes.delete('/mail/outbox/:id', requireCaller, c => c.json(cancelSend(owne
 
 // Who can be chosen as a recipient or to share with. No usernames or addresses: the id is the random one used in the feed.
 mailRoutes.get('/members', requireCaller, async c => c.json(await listMembers(ownerOf(c))))
+
+// --- Auto-reply, kept as a script on the mail server so it works while the member is logged out ---
+
+mailRoutes.use('/mail/auto-reply', jsonLimit)
+mailRoutes.get('/mail/auto-reply', requireCaller, async c => c.json(await getAutoReply(await accountOf(c))))
+mailRoutes.put('/mail/auto-reply', requireCaller, async c =>
+  c.json(await saveAutoReply(await accountOf(c), readAutoReply(await readBody(c)))),
+)

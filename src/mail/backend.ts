@@ -59,6 +59,11 @@ export interface SearchQuery {
   header?: [name: string, value: string]
 }
 
+export interface SieveScript {
+  name: string
+  active: boolean
+}
+
 export interface MailBackend {
   listFolders(account: Account): Promise<FolderInfo[]>
   createFolder(account: Account, path: string): Promise<void>
@@ -73,6 +78,13 @@ export interface MailBackend {
   append(account: Account, folder: string, raw: Buffer, flags: string[], date?: Date): Promise<number>
   expunge(account: Account, folder: string, uids: number[]): Promise<void>
   submit(account: Account, message: { from: string; to: string[]; raw: Buffer }): Promise<void>
+  // The member's filter scripts on the server (ManageSieve). Only one of them can be active.
+  listSieve(account: Account): Promise<SieveScript[]>
+  getSieve(account: Account, name: string): Promise<string | null>
+  // Throws when the server doesn't accept the script
+  putSieve(account: Account, name: string, script: string): Promise<void>
+  // Without a name, no script is active
+  activateSieve(account: Account, name: string | null): Promise<void>
 }
 
 let current: MailBackend | null = null

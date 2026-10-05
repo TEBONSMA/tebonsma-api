@@ -1,7 +1,7 @@
 import { simpleParser, type ParsedMail } from 'mailparser'
 import MailComposer from 'nodemailer/lib/mail-composer'
 import { previewOf } from '../src/mail/html.ts'
-import type { Account, Address, FolderInfo, Head, MailBackend, SearchQuery } from '../src/mail/backend.ts'
+import type { Account, Address, FolderInfo, Head, MailBackend, SearchQuery, SieveScript } from '../src/mail/backend.ts'
 
 // Stands in for the mail server (Dovecot and Postfix) during local development: every
 // member's mailbox lives in memory, holds real RFC 822 messages, and starts out with a few
@@ -32,6 +32,41 @@ const FOLDERS: [path: string, specialUse: string | null][] = [
 ]
 
 const boxes = new Map<string, Promise<Map<string, Folder>>>()
+
+// Filter scripts, kept as text. The mock doesn't run Sieve; it only knows the auto-reply
+// that src/mail/autoReply.ts writes, from the settings in the comment at the top.
+const sieve = new Map<string, { scripts: Map<string, string>; active: string | null }>()
+const sieveOf = (email: string) => {
+  const key = email.toLowerCase()
+  if (!sieve.has(key)) sieve.set(key, { scripts: new Map(), active: null })
+  return sieve.get(key)!
+}
+
+// Who has been answered by whom, so an auto-reply goes out once per sender in four days
+const answered = new Map<string, number>()
+const FOUR_DAYS_MS = 4 * 24 * 60 * 60 * 1000
+
+interface AutoReplySettings {
+  enabled?: boolean
+  subject?: string
+  body?: string
+  from?: string | null
+  to?: string | null
+}
+
+function activeAutoReply(email: string): AutoReplySettings | null {
+  const { scripts, active } = sieveOf(email)
+  const line = active ? scripts.get(active)?.split(/\r?\n/).find(l => l.startsWith('# teb-autoreply: ')) : undefined
+  if (!line) return null
+  try {
+    const settings = JSON.parse(line.slice('# teb-autoreply: '.length)) as AutoReplySettings
+    const today = new Date().toISOString().slice(0, 10)
+    const inRange = (!settings.from || today >= settings.from) && (!settings.to || today <= settings.to)
+    return settings.enabled && inRange ? settings : null
+  } catch {
+    return null
+  }
+}
 let nextValidity = 1000
 
 const newFolder = (specialUse: string | null): Folder => ({
@@ -435,6 +470,47 @@ export const mockMail: MailBackend = {
       }
       const inbox = (await boxOf(address)).get('INBOX')!
       addToFolder(inbox, raw, [], new Date())
+
+      // Like the server's vacation: one answer per sender, never to mail that is itself automatic
+      const settings = activeAutoReply(address)
+      const parsed = await simpleParser(raw)
+      const sender = toAddresses(parsed.from)[0]
+      const key = `${address}>${sender?.address}`
+      if (settings && sender && !parsed.headers.has('auto-submitted') && (answered.get(key) ?? 0) < Date.now() - FOUR_DAYS_MS) {
+        answered.set(key, Date.now())
+        const reply = await new MailComposer({
+          from: address,
+          to: sender.address,
+          subject: settings.subject || `Autosvar: ${parsed.subject ?? ''}`,
+          text: settings.body ?? '',
+          headers: { 'Auto-Submitted': 'auto-replied' },
+          inReplyTo: parsed.messageId,
+        })
+          .compile()
+          .build()
+        if (sender.address.toLowerCase().endsWith('@tebonsma.test')) {
+          addToFolder((await boxOf(sender.address)).get('INBOX')!, reply, [], new Date())
+        }
+      }
     }
+  },
+
+  async listSieve(account) {
+    const { scripts, active } = sieveOf(account.email)
+    return [...scripts.keys()].map((name): SieveScript => ({ name, active: name === active }))
+  },
+
+  async getSieve(account, name) {
+    return sieveOf(account.email).scripts.get(name) ?? null
+  },
+
+  async putSieve(account, name, script) {
+    // The real server rejects what it can't read; the mock takes any script that isn't empty
+    if (!script.trim()) throw new Error('Empty script')
+    sieveOf(account.email).scripts.set(name, script)
+  },
+
+  async activateSieve(account, name) {
+    sieveOf(account.email).active = name
   },
 }

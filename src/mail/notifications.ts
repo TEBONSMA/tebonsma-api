@@ -9,6 +9,8 @@ db.exec(`
     recipient  TEXT NOT NULL,
     kind       TEXT NOT NULL CHECK (kind IN ('mail', 'mail_share', 'mail_failed')),
     mail_id    TEXT,
+    -- The Message-ID the notification is about, so the same mail is only announced once
+    message_key TEXT,
     sender     TEXT NOT NULL DEFAULT '',
     actor      TEXT,
     excerpt    TEXT NOT NULL DEFAULT '',
@@ -16,6 +18,7 @@ db.exec(`
     read_at    TEXT
   );
   CREATE INDEX IF NOT EXISTS mail_notifications_recipient ON mail_notifications (recipient, created_at DESC);
+  CREATE UNIQUE INDEX IF NOT EXISTS mail_notifications_once ON mail_notifications (recipient, kind, message_key) WHERE message_key IS NOT NULL;
 `)
 
 // A mail that was sent (or scheduled) in the member's name never left. It is kept in Drafts.
@@ -23,4 +26,12 @@ export function addFailure(recipient: string, subject: string) {
   db.prepare(
     "INSERT INTO mail_notifications (id, recipient, kind, excerpt, created_at) VALUES (?, ?, 'mail_failed', ?, ?)",
   ).run(randomUUID(), recipient, subject || '(uten emne)', new Date().toISOString())
+}
+
+// Tells the member about a mail in their inbox. A mail that has been announced before is skipped.
+export function addMailNotice(recipient: string, notice: { mailId: string; messageKey: string; sender: string; subject: string }) {
+  db.prepare(
+    `INSERT OR IGNORE INTO mail_notifications (id, recipient, kind, mail_id, message_key, sender, excerpt, created_at)
+     VALUES (?, ?, 'mail', ?, ?, ?, ?, ?)`,
+  ).run(randomUUID(), recipient, notice.mailId, notice.messageKey, notice.sender, notice.subject || '(uten emne)', new Date().toISOString())
 }
