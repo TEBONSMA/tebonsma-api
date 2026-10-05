@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { HTTPException } from 'hono/http-exception'
 import { db, transaction } from './db.ts'
+import { voidEventMarkets } from './bets.ts'
 import { eventOf, isEvent, saveEvent, type EventInput } from './events.ts'
 import { getMembers, type PublicMember } from './members.ts'
 
@@ -344,7 +345,11 @@ export function deletePost(viewer: Viewer, id: string) {
   if (post.author !== viewer.username && !viewer.admin) {
     throw new HTTPException(403, { message: 'Du kan bare slette egne innlegg' })
   }
-  db.prepare('DELETE FROM feed_posts WHERE id = ?').run(id)
+  transaction(() => {
+    // Bets on an event are paid back before it goes
+    voidEventMarkets(id)
+    db.prepare('DELETE FROM feed_posts WHERE id = ?').run(id)
+  })
 }
 
 export function setPinned(viewer: Viewer, id: string, pinned: boolean) {

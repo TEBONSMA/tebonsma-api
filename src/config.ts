@@ -14,6 +14,8 @@ export const config = {
   dataDir: process.env.DATA_DIR ?? './data',
   // Members of this group can pin posts, handle reports and remove other members' posts
   adminGroup: process.env.ADMIN_GROUP ?? 'lldap_admin',
+  // The members of TEBONSMA, as opposed to other accounts in the directory
+  memberGroup: process.env.MEMBER_GROUP ?? 'medlemmer',
   lldap: {
     url: (process.env.LLDAP_URL ?? 'http://lldap:17170').replace(/\/$/, ''),
     username: required('LLDAP_USERNAME'),
