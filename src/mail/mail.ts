@@ -2,6 +2,7 @@ import { HTTPException } from 'hono/http-exception'
 import { simpleParser, type AddressObject, type ParsedMail } from 'mailparser'
 import { getProfile } from '../lldap.ts'
 import { backend, type Account, type Address, type FolderInfo, type Head, type SearchQuery } from './backend.ts'
+import { groupHeads, plainSubject } from './grouping.ts'
 import { sanitizeIncoming, textToHtml } from './html.ts'
 
 // --- Whose mailbox ---
@@ -165,7 +166,13 @@ export const FLAGGED = '\\Flagged'
 export const LABEL_PREFIX = '$teb_'
 
 export interface MessageSummary {
+  // For a conversation, the id of its newest mail
   id: string
+  // Every mail in the row: just this one, or the whole conversation. Changes to the row apply to all of them.
+  ids: string[]
+  count: number
+  unreadCount: number
+  participants: Address[]
   folder: string
   from: Address | null
   to: Address[]
@@ -181,8 +188,13 @@ export interface MessageSummary {
 
 export function summarize(mailbox: Mailbox, head: Head): MessageSummary {
   const folder = [...mailbox.paths.values(), ...mailbox.own].find(f => f.path === head.folder)!
+  const id = encodeId({ path: head.folder, uidValidity: head.uidValidity }, head.uid)
   return {
-    id: encodeId({ path: head.folder, uidValidity: head.uidValidity }, head.uid),
+    id,
+    ids: [id],
+    count: 1,
+    unreadCount: head.flags.includes(SEEN) ? 0 : 1,
+    participants: head.from ? [head.from] : [],
     folder: keyOf(mailbox, folder.path),
     from: head.from,
     to: head.to,
@@ -228,6 +240,8 @@ export interface ListOptions {
   limit: number
   sort: Sort
   filter: Filter
+  // Mails of one conversation are one row. Searches by words always list single mails.
+  conversations: boolean
 }
 
 export const VIRTUAL = ['all', 'favorites', 'unread'] as const
@@ -268,16 +282,40 @@ function foldersFor(mailbox: Mailbox, key: string) {
   return [folder]
 }
 
-const plain = (subject: string) => subject.replace(/^((re|fwd?|sv|vs|vl|fw)(\[\d+\])?:\s*)+/i, '').trim().toLowerCase()
 const who = (head: Head) => (head.from?.name || head.from?.address || '').toLowerCase()
 
 const COMPARE: Record<Sort, (a: Head, b: Head) => number> = {
   new: (a, b) => b.date.localeCompare(a.date),
   old: (a, b) => a.date.localeCompare(b.date),
   sender: (a, b) => who(a).localeCompare(who(b), 'nb') || b.date.localeCompare(a.date),
-  subject: (a, b) => plain(a.subject).localeCompare(plain(b.subject), 'nb') || b.date.localeCompare(a.date),
+  subject: (a, b) => plainSubject(a.subject).localeCompare(plainSubject(b.subject), 'nb') || b.date.localeCompare(a.date),
   size: (a, b) => b.size - a.size,
 }
+
+// One row for a whole conversation: the newest mail's look, the conversation's counts
+function conversationRow(mailbox: Mailbox, group: Head[]): MessageSummary {
+  const newest = group[group.length - 1]
+  const row = summarize(mailbox, newest)
+  const people = new Map<string, Address>()
+  for (const head of group) if (head.from) people.set(head.from.address.toLowerCase(), head.from)
+  const rows = group.map(head => summarize(mailbox, head))
+  return {
+    ...row,
+    // Newest first, as the list is
+    ids: rows.map(r => r.id).reverse(),
+    count: group.length,
+    unreadCount: rows.filter(r => !r.seen).length,
+    seen: rows.every(r => r.seen),
+    flagged: rows.some(r => r.flagged),
+    hasAttachments: rows.some(r => r.hasAttachments),
+    labels: [...new Set(rows.flatMap(r => r.labels))],
+    size: group.reduce((sum, head) => sum + head.size, 0),
+    subject: group[0].subject,
+    participants: [...people.values()],
+  }
+}
+
+const SEARCHES = ['text', 'from', 'to', 'subject'] as const
 
 export async function listMessages(account: Account, options: ListOptions) {
   const mailbox = await openMailbox(account)
@@ -288,7 +326,8 @@ export async function listMessages(account: Account, options: ListOptions) {
   const query = toQuery(filter)
 
   // One folder, by date: the server's own order is the answer, so only the page is fetched
-  if (folders.length === 1 && (options.sort === 'new' || options.sort === 'old')) {
+  const conversational = options.conversations && !SEARCHES.some(field => options.filter[field])
+  if (!conversational && folders.length === 1 && (options.sort === 'new' || options.sort === 'old')) {
     const uids = await backend().search(account, folders[0].path, query)
     const ordered = options.sort === 'old' ? uids : [...uids].reverse()
     const page = ordered.slice(options.offset, options.offset + options.limit)
@@ -306,6 +345,28 @@ export async function listMessages(account: Account, options: ListOptions) {
     const uids = (await backend().search(account, folder.path, query)).slice(-WINDOW)
     found.push(...(await backend().heads(account, folder.path, uids)))
   }
+
+  if (conversational) {
+    // Each conversation is sorted as its newest mail, with the conversation's total size
+    const groups = groupHeads(found)
+    const stand = (group: Head[]): Head => ({
+      ...group[group.length - 1],
+      subject: group[0].subject,
+      size: group.reduce((sum, head) => sum + head.size, 0),
+    })
+    const sorted = groups
+      .map(group => ({ group, head: stand(group) }))
+      .sort((a, b) => COMPARE[options.sort](a.head, b.head))
+      .slice(0, WINDOW)
+    const page = sorted.slice(options.offset, options.offset + options.limit)
+    const end = options.offset + page.length
+    return {
+      messages: page.map(({ group }) => conversationRow(mailbox, group)),
+      nextOffset: end < sorted.length ? end : null,
+      total: sorted.length,
+    }
+  }
+
   const ordered = found.sort(COMPARE[options.sort]).slice(0, WINDOW)
   const page = ordered.slice(options.offset, options.offset + options.limit)
   const end = options.offset + page.length

@@ -13,6 +13,8 @@ import {
   restoreMessages,
   setSeenAndFlagged,
 } from './mail/actions.ts'
+import { getSettings, saveSettings } from './mail/settings.ts'
+import { openConversation } from './mail/threads.ts'
 import { createLabel, deleteLabel, listLabels, updateLabel } from './mail/labels.ts'
 import {
   accountFor,
@@ -97,6 +99,7 @@ mailRoutes.get('/mail/messages', requireCaller, async c => {
       limit,
       sort: sort as Sort,
       filter: readFilter(c),
+      conversations: getSettings(ownerOf(c)).conversations,
     }),
   )
 })
@@ -152,6 +155,15 @@ mailRoutes.delete('/mail/labels/:id', requireCaller, c => {
   deleteLabel(ownerOf(c), c.req.param('id'))
   return c.json({ ok: true })
 })
+
+// The whole conversation a mail is part of, oldest first
+mailRoutes.get('/mail/threads/:id', requireCaller, async c => c.json(await openConversation(await accountOf(c), c.req.param('id'))))
+
+// --- Settings ---
+
+mailRoutes.use('/mail/settings', jsonLimit)
+mailRoutes.get('/mail/settings', requireCaller, c => c.json(getSettings(ownerOf(c))))
+mailRoutes.put('/mail/settings', requireCaller, async c => c.json(saveSettings(ownerOf(c), await readBody(c))))
 
 mailRoutes.get('/mail/messages/:id', requireCaller, async c =>
   c.json(await readMessage(await accountOf(c), c.req.param('id'), c.req.query('images') === '1')),
