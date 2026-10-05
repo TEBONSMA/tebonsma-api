@@ -8,6 +8,7 @@ import { config } from './config.ts'
 import { eventRoutes } from './eventRoutes.ts'
 import { feedRoutes } from './feedRoutes.ts'
 import { mailRoutes } from './mailRoutes.ts'
+import { startScheduler } from './mail/scheduled.ts'
 import { getProfile as readProfile, setAvatar, updateProfile, type ProfileChanges } from './lldap.ts'
 import { rememberProfile } from './members.ts'
 import { getLeaderboard, isGame, ScoreRejected, startRun, submitScore } from './scoreboard.ts'
@@ -136,6 +137,8 @@ app.onError((err, c) => {
 })
 
 app.notFound(c => c.json({ error: 'Finnes ikke' }, 404))
+
+startScheduler()
 
 serve({ fetch: app.fetch, port: config.port }, info => {
   console.log(`tebonsma-api listening on port ${info.port}`)

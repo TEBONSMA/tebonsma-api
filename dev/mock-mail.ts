@@ -407,6 +407,7 @@ export const mockMail: MailBackend = {
       total: messages.length,
       unseen: messages.filter(m => !m.flags.has('\\Seen')).length,
       uidValidity: folder.uidValidity,
+      uidNext: folder.nextUid,
     }
   },
 

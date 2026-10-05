@@ -103,14 +103,29 @@ export function findByMemberId(id: string) {
 // Everyone with an account, for choosing who to send a mail or share something to. Only the
 // random id, name and picture leave the API, never usernames or addresses.
 const LIST_MS = 5 * 60 * 1000
-let listed: { at: number; usernames: string[] } | null = null
+let listed: { at: number; usernames: string[]; emails: Map<string, string> } | null = null
 
-export async function listMembers(except: string) {
+async function ensureListed() {
   if (!listed || Date.now() - listed.at > LIST_MS) {
     const profiles = await listUsers()
     for (const profile of profiles) rememberProfile(profile)
-    listed = { at: Date.now(), usernames: profiles.map(profile => profile.username) }
+    listed = {
+      at: Date.now(),
+      usernames: profiles.map(profile => profile.username),
+      emails: new Map(profiles.flatMap(profile => (profile.email ? [[profile.email.toLowerCase(), profile.username] as const] : []))),
+    }
   }
-  const members = await getMembers(listed.usernames.filter(username => username !== except))
+  return listed
+}
+
+export async function listMembers(except: string) {
+  const { usernames } = await ensureListed()
+  const members = await getMembers(usernames.filter(username => username !== except))
   return [...members.values()].sort((a, b) => a.name.localeCompare(b.name, 'nb'))
+}
+
+// Whether a mail address belongs to a member, so a mail from one is shown as from them
+export async function findMemberByEmail(address: string) {
+  const username = (await ensureListed()).emails.get(address.toLowerCase())
+  return username ?? null
 }

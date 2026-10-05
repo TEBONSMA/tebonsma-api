@@ -168,6 +168,8 @@ export const LABEL_PREFIX = '$teb_'
 export interface MessageSummary {
   // For a conversation, the id of its newest mail
   id: string
+  // The mail's own Message-ID, which is how it is found again when it has moved
+  messageId: string | null
   // Every mail in the row: just this one, or the whole conversation. Changes to the row apply to all of them.
   ids: string[]
   count: number
@@ -181,6 +183,9 @@ export interface MessageSummary {
   date: string
   seen: boolean
   flagged: boolean
+  // Answered or forwarded from here, as the mail server remembers it
+  answered: boolean
+  forwarded: boolean
   hasAttachments: boolean
   labels: string[]
   size: number
@@ -191,6 +196,7 @@ export function summarize(mailbox: Mailbox, head: Head): MessageSummary {
   const id = encodeId({ path: head.folder, uidValidity: head.uidValidity }, head.uid)
   return {
     id,
+    messageId: head.messageId,
     ids: [id],
     count: 1,
     unreadCount: head.flags.includes(SEEN) ? 0 : 1,
@@ -203,6 +209,8 @@ export function summarize(mailbox: Mailbox, head: Head): MessageSummary {
     date: head.date,
     seen: head.flags.includes(SEEN),
     flagged: head.flags.includes(FLAGGED),
+    answered: head.flags.includes('\\Answered'),
+    forwarded: head.flags.includes('$Forwarded'),
     hasAttachments: head.hasAttachments,
     labels: head.flags.filter(flag => flag.startsWith(LABEL_PREFIX)).map(flag => flag.slice(LABEL_PREFIX.length)),
     size: head.size,
@@ -307,6 +315,8 @@ function conversationRow(mailbox: Mailbox, group: Head[]): MessageSummary {
     unreadCount: rows.filter(r => !r.seen).length,
     seen: rows.every(r => r.seen),
     flagged: rows.some(r => r.flagged),
+    answered: rows.every(r => r.answered),
+    forwarded: rows.some(r => r.forwarded),
     hasAttachments: rows.some(r => r.hasAttachments),
     labels: [...new Set(rows.flatMap(r => r.labels))],
     size: group.reduce((sum, head) => sum + head.size, 0),

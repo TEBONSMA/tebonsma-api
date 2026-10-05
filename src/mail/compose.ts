@@ -123,6 +123,9 @@ export interface Built {
   // Everyone it goes to, including those in blind copy
   recipients: string[]
   messageId: string
+  // The Message-IDs of the mail this one answers or forwards, so the originals can be marked later
+  repliesTo: string | null
+  forwards: string | null
 }
 
 export async function buildMessage(account: Account, owner: string, input: ComposeInput, options: { draft: boolean; messageId?: string }): Promise<Built> {
@@ -131,8 +134,10 @@ export async function buildMessage(account: Account, owner: string, input: Compo
   )
 
   // The attachments of a mail that is forwarded go along with it
+  let forwards: string | null = null
   if (input.forwardOf) {
     const { parsed } = await load(account, input.forwardOf)
+    forwards = parsed.messageId ?? null
     for (const attachment of parsed.attachments) {
       if (isInlinePart(attachment)) continue
       files.push({ filename: attachment.filename || 'vedlegg', content: attachment.content, contentType: attachment.contentType })
@@ -143,9 +148,11 @@ export async function buildMessage(account: Account, owner: string, input: Compo
   }
 
   let threading = input.threading
+  let repliesTo: string | null = null
   if (input.replyTo) {
     const { parsed } = await load(account, input.replyTo)
     const original = parsed.messageId ?? null
+    repliesTo = original
     threading = { inReplyTo: original, references: [...[parsed.references ?? []].flat(), ...(original ? [original] : [])].slice(-30) }
   }
 
@@ -171,6 +178,8 @@ export async function buildMessage(account: Account, owner: string, input: Compo
     from: account.email,
     recipients: [...input.to, ...input.cc, ...input.bcc].map(a => a.address),
     messageId,
+    repliesTo,
+    forwards,
   }
 }
 

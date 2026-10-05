@@ -67,7 +67,7 @@ export interface SieveScript {
 export interface MailBackend {
   listFolders(account: Account): Promise<FolderInfo[]>
   createFolder(account: Account, path: string): Promise<void>
-  status(account: Account, folder: string): Promise<{ total: number; unseen: number; uidValidity: number }>
+  status(account: Account, folder: string): Promise<{ total: number; unseen: number; uidValidity: number; uidNext: number }>
   // Matching UIDs, oldest first
   search(account: Account, folder: string, query: SearchQuery): Promise<number[]>
   heads(account: Account, folder: string, uids: number[]): Promise<Head[]>

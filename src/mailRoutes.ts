@@ -22,6 +22,9 @@ import { deleteUploads, MAX_UPLOAD_BYTES, readUpload, saveUpload } from './mail/
 import { listMembers } from './members.ts'
 import { getAutoReply, readAutoReply, saveAutoReply } from './mail/autoReply.ts'
 import { readUntil, releaseDue, snoozeMessages } from './mail/snooze.ts'
+import { finishOffline, hasOfflineToken, offlineAvailable, revokeOffline, startOffline } from './mail/offline.ts'
+import { cancelScheduled, readSendAt, rescheduleMail, scheduleMail, scheduledTimes, settleFailed } from './mail/scheduled.ts'
+import { forgetInboxCount, markMailOpened } from './mail/notifications.ts'
 import { createLabel, deleteLabel, listLabels, updateLabel } from './mail/labels.ts'
 import {
   accountFor,
@@ -52,13 +55,25 @@ mailRoutes.use('/mail/labels', jsonLimit)
 mailRoutes.use('/mail/drafts/*', bodyLimit({ maxSize: 2 * 1024 * 1024 }))
 mailRoutes.use('/mail/send', bodyLimit({ maxSize: 2 * 1024 * 1024 }))
 mailRoutes.use('/mail/outbox/*', jsonLimit)
+mailRoutes.use('/mail/scheduled/*', jsonLimit)
+mailRoutes.use('/mail/offline/*', jsonLimit)
+mailRoutes.use('/mail/offline', jsonLimit)
 
 const ownerOf = (c: Context<Env>) => c.get('caller').username
+
+// Whatever changes mail here may change how many are unread, so the count is worked out again at the next look
+mailRoutes.use('/mail/*', async (c, next) => {
+  await next()
+  const caller = c.get('caller')
+  if (caller && c.req.method !== 'GET') forgetInboxCount(caller.username)
+})
 
 mailRoutes.get('/mail/folders', requireCaller, async c => {
   const account = await accountOf(c)
   // Snoozed mails whose time is up come back to the inbox first, so the counts are right
   await releaseDue(account, ownerOf(c)).catch(err => console.error('Bringing back snoozed mail failed:', err))
+  // Scheduled mails that could not be sent go to Drafts now that the mailbox is open
+  await settleFailed(account, ownerOf(c)).catch(err => console.error('Moving unsent mail to Drafts failed:', err))
   const mailbox = await openMailbox(account)
   return c.json({ folders: folderViews(mailbox), labels: listLabels(ownerOf(c)) })
 })
@@ -105,16 +120,21 @@ mailRoutes.get('/mail/messages', requireCaller, async c => {
   if (!SORTS.includes(sort as Sort)) throw bad('Ukjent sortering')
   const offset = Math.max(0, Math.trunc(Number(c.req.query('offset') ?? 0)) || 0)
   const limit = Math.min(MAX_PAGE_SIZE, Math.max(1, Math.trunc(Number(c.req.query('limit') ?? PAGE_SIZE)) || PAGE_SIZE))
-  return c.json(
-    await listMessages(await accountOf(c), {
-      folder: c.req.query('folder') ?? 'inbox',
-      offset,
-      limit,
-      sort: sort as Sort,
-      filter: readFilter(c),
-      conversations: getSettings(ownerOf(c)).conversations,
-    }),
-  )
+  const folder = c.req.query('folder') ?? 'inbox'
+  const page = await listMessages(await accountOf(c), {
+    folder,
+    offset,
+    limit,
+    sort: sort as Sort,
+    filter: readFilter(c),
+    conversations: getSettings(ownerOf(c)).conversations,
+  })
+  // A scheduled mail is listed at the time it will be sent, not the time it was written
+  if (folder === 'scheduled') {
+    const times = scheduledTimes(ownerOf(c))
+    for (const mail of page.messages) mail.date = (mail.messageId && times.get(mail.messageId)) || mail.date
+  }
+  return c.json(page)
 })
 
 // --- Changing mails. All of these take a list, so one mail and a selection are the same call. ---
@@ -178,7 +198,11 @@ mailRoutes.delete('/mail/labels/:id', requireCaller, c => {
 })
 
 // The whole conversation a mail is part of, oldest first
-mailRoutes.get('/mail/threads/:id', requireCaller, async c => c.json(await openConversation(await accountOf(c), c.req.param('id'))))
+mailRoutes.get('/mail/threads/:id', requireCaller, async c => {
+  const conversation = await openConversation(await accountOf(c), c.req.param('id'))
+  markMailOpened(ownerOf(c), conversation.messages)
+  return c.json(conversation)
+})
 
 // --- Settings ---
 
@@ -186,9 +210,11 @@ mailRoutes.use('/mail/settings', jsonLimit)
 mailRoutes.get('/mail/settings', requireCaller, c => c.json(getSettings(ownerOf(c))))
 mailRoutes.put('/mail/settings', requireCaller, async c => c.json(saveSettings(ownerOf(c), await readBody(c))))
 
-mailRoutes.get('/mail/messages/:id', requireCaller, async c =>
-  c.json(await readMessage(await accountOf(c), c.req.param('id'), c.req.query('images') === '1')),
-)
+mailRoutes.get('/mail/messages/:id', requireCaller, async c => {
+  const message = await readMessage(await accountOf(c), c.req.param('id'), c.req.query('images') === '1')
+  markMailOpened(ownerOf(c), [message])
+  return c.json(message)
+})
 
 mailRoutes.get('/mail/messages/:id/attachments/:n', requireCaller, async c => {
   const n = Number(c.req.param('n'))
@@ -261,9 +287,39 @@ mailRoutes.delete('/mail/drafts/:id', requireCaller, async c => {
   return c.json({ ok: true })
 })
 
+// With sendAt the mail is kept until then instead of being sent now
 mailRoutes.post('/mail/send', requireCaller, async c => {
-  const input = await readCompose(await readBody(c), { forSending: true })
+  const body = await readBody(c)
+  const input = await readCompose(body, { forSending: true })
+  if (body.sendAt !== undefined && body.sendAt !== null) {
+    return c.json(await scheduleMail(await accountOf(c), ownerOf(c), input, readSendAt(body.sendAt)))
+  }
   return c.json(await sendMail(await accountOf(c), ownerOf(c), input))
+})
+
+// :id is the mail's id in the Scheduled folder
+mailRoutes.patch('/mail/scheduled/:id', requireCaller, async c => {
+  const { sendAt } = await readBody(c)
+  await rescheduleMail(await accountOf(c), ownerOf(c), c.req.param('id'), readSendAt(sendAt))
+  return c.json({ ok: true })
+})
+
+// The mail goes back to Drafts, and the id of the draft is returned
+mailRoutes.delete('/mail/scheduled/:id', requireCaller, async c => c.json(await cancelScheduled(await accountOf(c), ownerOf(c), c.req.param('id'))))
+
+// --- Permission to send later ---
+
+mailRoutes.get('/mail/offline', requireCaller, c => c.json({ available: offlineAvailable(), enabled: hasOfflineToken(ownerOf(c)) }))
+mailRoutes.post('/mail/offline/start', requireCaller, c => c.json(startOffline(ownerOf(c))))
+mailRoutes.post('/mail/offline/callback', requireCaller, async c => {
+  const { code, state } = await readBody(c)
+  if (typeof code !== 'string' || typeof state !== 'string' || !code || !state) throw bad('Ugyldig forespørsel')
+  await finishOffline(ownerOf(c), code, state)
+  return c.json({ available: true, enabled: true })
+})
+mailRoutes.delete('/mail/offline', requireCaller, async c => {
+  await revokeOffline(ownerOf(c))
+  return c.json({ available: offlineAvailable(), enabled: false })
 })
 
 mailRoutes.delete('/mail/outbox/:id', requireCaller, c => c.json(cancelSend(ownerOf(c), c.req.param('id'))))

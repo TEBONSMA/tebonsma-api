@@ -19,6 +19,10 @@ process.env.LLDAP_URL ??= mockUrl
 process.env.LLDAP_USERNAME ??= 'mock'
 process.env.LLDAP_PASSWORD ??= 'mock'
 process.env.ALLOWED_ORIGINS ??= 'http://localhost:5173'
+// Send later talks to the mock login server, which gives out tokens to anyone
+process.env.MAIL_OFFLINE_CLIENT_ID ??= 'tebonsma-mail'
+process.env.MAIL_OFFLINE_CLIENT_SECRET ??= 'mock'
+process.env.MAIL_OFFLINE_KEY ??= '6d6f636b2d6b65792d666f722d6c6f63616c2d646576656c6f706d656e742d6f6e6c79'.slice(0, 64)
 
 // Like the mock users' profiles, the scoreboard starts empty on every restart
 if (!process.env.DATA_DIR) {

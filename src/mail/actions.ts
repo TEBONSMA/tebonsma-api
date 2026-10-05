@@ -191,3 +191,24 @@ export async function createOwnFolder(account: Account, raw: unknown) {
   await backend().createFolder(account, name)
   return name
 }
+
+// --- Answered and forwarded ---
+
+export const ANSWERED = '\\Answered'
+export const FORWARDED = '$Forwarded'
+
+// Marks the mails a new mail answered or forwarded, wherever they are now. They are found by
+// Message-ID, since a mail that has been moved since has a new UID.
+export async function markOriginals(account: Account, marks: { messageId: string | null; flag: string }[]) {
+  const wanted = marks.filter((mark): mark is { messageId: string; flag: string } => mark.messageId !== null)
+  if (wanted.length === 0) return
+  const mailbox = await openMailbox(account)
+  const skipped = (['trash', 'junk', 'drafts', 'scheduled'] as const).map(role => mailbox.paths.get(role)?.path)
+  for (const folder of [...mailbox.paths.values(), ...mailbox.own]) {
+    if (skipped.includes(folder.path)) continue
+    for (const { messageId, flag } of wanted) {
+      const uids = await backend().search(account, folder.path, { header: ['Message-ID', messageId] })
+      if (uids.length > 0) await backend().setFlags(account, folder.path, uids, { add: [flag] })
+    }
+  }
+}

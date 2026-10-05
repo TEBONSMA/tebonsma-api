@@ -3,7 +3,8 @@ import { HTTPException } from 'hono/http-exception'
 import { db } from '../db.ts'
 import { backend, type Account } from './backend.ts'
 import { buildMessage, deleteDraft, saveDraft, type ComposeInput } from './compose.ts'
-import { decodeId, ensureFolder, openMailbox } from './mail.ts'
+import { ANSWERED, FORWARDED, markOriginals } from './actions.ts'
+import { ensureFolder, openMailbox } from './mail.ts'
 import { addFailure } from './notifications.ts'
 import { getSettings } from './settings.ts'
 import { deleteUploads } from './uploads.ts'
@@ -49,6 +50,8 @@ interface Pending {
   sentCopy: Buffer
   from: string
   recipients: string[]
+  repliesTo: string | null
+  forwards: string | null
   reservation: string
   timer: NodeJS.Timeout
 }
@@ -56,8 +59,6 @@ interface Pending {
 const pending = new Map<string, Pending>()
 
 const SEEN = '\\Seen'
-const ANSWERED = '\\Answered'
-const FORWARDED = '$Forwarded'
 
 // The mail has been accepted by the mail server: file a copy under Sent, drop the draft and the
 // uploads, and mark what it answered or forwarded
@@ -72,21 +73,13 @@ async function deliver(job: Pending) {
     await backend().append(account, sent.path, job.sentCopy, [SEEN])
     await deleteDraft(account, job.draftId)
     deleteUploads(owner, input.uploadIds)
-    for (const [id, flag] of [[input.replyTo, ANSWERED], [input.forwardOf, FORWARDED]] as const) {
-      if (!id) continue
-      const [ref] = await refsOf(account, id)
-      if (ref) await backend().setFlags(account, ref.path, [ref.uid], { add: [flag] })
-    }
+    await markOriginals(account, [
+      { messageId: job.repliesTo, flag: ANSWERED },
+      { messageId: job.forwards, flag: FORWARDED },
+    ])
   } catch (err) {
     console.error('A mail was sent, but filing it afterwards failed:', err)
   }
-}
-
-async function refsOf(account: Account, id: string) {
-  const ref = decodeId(id)
-  const mailbox = await openMailbox(account)
-  const folder = [...mailbox.paths.values(), ...mailbox.own].find(f => f.path === ref.path)
-  return folder && folder.uidValidity === ref.uidValidity ? [ref] : []
 }
 
 async function run(id: string, job: Pending) {
@@ -126,6 +119,8 @@ export async function sendMail(account: Account, owner: string, input: ComposeIn
       sentCopy: full.raw,
       from: wire.from,
       recipients: wire.recipients,
+      repliesTo: full.repliesTo,
+      forwards: full.forwards,
       reservation,
       timer: undefined as unknown as NodeJS.Timeout,
     }
