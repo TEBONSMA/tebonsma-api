@@ -1509,7 +1509,7 @@ export async function getLeaderboard() {
     .all() as { username: string; in_play: number; played: number; won: number }[]
   const members = await getMembers(usernames)
 
-  return balances
+  const rows = balances
     .map(row => {
       const stats = slips.find(s => s.username === row.username)
       const inPlay = stats?.in_play ?? 0
@@ -1523,6 +1523,8 @@ export async function getLeaderboard() {
       }
     })
     .sort((a, b) => b.total - a.total || a.member.name.localeCompare(b.member.name, 'nb'))
+  // Equal fortunes share a place, and the next place comes after all of them: 1, 1, 1, 4
+  return rows.map(row => ({ ...row, rank: 1 + rows.filter(other => other.total > row.total).length }))
 }
 
 // A member's page, by their public id: where they stand on the leaderboard and their slips.
@@ -1531,13 +1533,12 @@ export async function getMemberPage(id: string, settled: boolean) {
   const username = usernameOf(id)
   if (!username) throw new HTTPException(404, { message: 'Medlemmet finnes ikke' })
   const leaderboard = await getLeaderboard()
-  const place = leaderboard.findIndex(row => row.member.id === id)
+  const row = leaderboard.find(entry => entry.member.id === id)
   const [member] = (await getMembers([username])).values()
-  const row = leaderboard[place]
   return {
     member,
     // Missing until they have opened TebBet
-    rank: row ? place + 1 : null,
+    rank: row?.rank ?? null,
     balance: row?.balance ?? 0,
     inPlay: row?.inPlay ?? 0,
     total: row?.total ?? 0,
