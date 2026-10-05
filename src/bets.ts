@@ -1191,16 +1191,18 @@ export function getSlips(viewer: Viewer, ids: string[]) {
   return toSlips(rows)
 }
 
-// The member's own slips: the ones still running, or the ones that are done
-export function listSlips(viewer: Viewer, settled: boolean) {
+// A member's slips: the ones still running, or the ones that are done
+function slipsOf(username: string, settled: boolean) {
   const rows = db
     .prepare(
       `SELECT * FROM bet_slips WHERE username = ? AND (status = 'open') = ?
        ORDER BY COALESCE(settled_at, created_at) DESC LIMIT ?`,
     )
-    .all(viewer.username, settled ? 0 : 1, SLIPS_SHOWN) as unknown as SlipRow[]
+    .all(username, settled ? 0 : 1, SLIPS_SHOWN) as unknown as SlipRow[]
   return toSlips(rows)
 }
+
+export const listSlips = (viewer: Viewer, settled: boolean) => slipsOf(viewer.username, settled)
 
 // --- Ledger and leaderboard ---
 
@@ -1281,4 +1283,26 @@ export async function getLeaderboard() {
       }
     })
     .sort((a, b) => b.total - a.total || a.member.name.localeCompare(b.member.name, 'nb'))
+}
+
+// A member's page, by their public id: where they stand on the leaderboard and their slips.
+// Bets are open to every member anyway; the account statement stays the member's own.
+export async function getMemberPage(id: string, settled: boolean) {
+  const username = usernameOf(id)
+  if (!username) throw new HTTPException(404, { message: 'Medlemmet finnes ikke' })
+  const leaderboard = await getLeaderboard()
+  const place = leaderboard.findIndex(row => row.member.id === id)
+  const [member] = (await getMembers([username])).values()
+  const row = leaderboard[place]
+  return {
+    member,
+    // Missing until they have opened TebBet
+    rank: row ? place + 1 : null,
+    balance: row?.balance ?? 0,
+    inPlay: row?.inPlay ?? 0,
+    total: row?.total ?? 0,
+    played: row?.played ?? 0,
+    won: row?.won ?? 0,
+    slips: slipsOf(username, settled),
+  }
 }

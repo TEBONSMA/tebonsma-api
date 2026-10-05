@@ -11,6 +11,7 @@ import {
   getAccount,
   getEvent,
   getLeaderboard,
+  getMemberPage,
   getSlips,
   listEvents,
   listLedger,
@@ -260,3 +261,5 @@ betRoutes.post('/bet/slips', async c => {
 betRoutes.get('/bet/slips', c => c.json(listSlips(viewerOf(c), c.req.query('status') === 'settled')))
 betRoutes.get('/bet/ledger', c => c.json(listLedger(viewerOf(c))))
 betRoutes.get('/bet/leaderboard', async c => c.json(await getLeaderboard()))
+// Another member's page: their place, coins and slips (?status=open|settled)
+betRoutes.get('/bet/members/:id', async c => c.json(await getMemberPage(id(c), c.req.query('status') === 'settled')))

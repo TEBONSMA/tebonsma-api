@@ -122,6 +122,7 @@ paid back out again.
 | GET | `/bet/slips?status=open\|settled` | Own slips |
 | GET | `/bet/ledger` | Own account statement |
 | GET | `/bet/leaderboard` | Everyone who has played, by coins in hand plus coins in play |
+| GET | `/bet/members/:id?status=open\|settled` | A member's page: place on the leaderboard, coins and slips (not their account statement) |
 
 `kind` is `yesno`, `choice`, `multi` or `overunder`. A multi market also takes `winners`,
 about how many of its outcomes will come true (at least 1, fewer than the outcomes, like
