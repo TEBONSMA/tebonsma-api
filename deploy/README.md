@@ -8,14 +8,22 @@ When `main` has moved, the script:
 
 1. Backs up the database (`sqlite3 .backup`), the running image (tagged `rollback`) and the files
    in `APP_DIR`.
-2. Replaces the repository's folders in `APP_DIR` (`.env` and everything else there stay), writes
-   the commit to `version.env`, and runs `docker compose up -d --build`.
-3. Waits for the container's health check, then checks that `/version` reports the new commit,
-   that the open endpoints answer and the member endpoints ask for a login, and that the database
-   is sound.
-4. If any of that fails, restores the files and the previous image and starts them again. The
-   same commit is not tried again by itself; fix the cause and run `deploy.sh --force`, or merge
-   a fix.
+2. Removes the previous commit's files from `APP_DIR` and copies in the new ones, so the folder
+   matches the commit. `.env`, `version.env` and anything else the repository doesn't own stay.
+   The commit goes into `version.env`, and the image is built.
+3. Tries the new image first as a separate container on a copy of the database, with no traffic.
+   It has to become healthy, run its migrations and answer: `/version` reports the commit, the
+   open endpoints answer, and the member endpoints ask for a login.
+4. Only then replaces the real container, and checks it the same way, plus a database integrity
+   check.
+5. If any of that fails, puts everything back: the files, the previous image, and (when the real
+   container had already started on the new version) the database from the backup. The same
+   commit is not tried again by itself; fix the cause and run `deploy.sh --force`, or merge a fix.
+
+The trial run means a version that doesn't start, or breaks on the real data, never serves a
+request. A rollback of the real container restores the database, since the new version may have
+changed it on start-up; what members wrote in the minute or two in between is lost, which is the
+price of the old version meeting a database it understands.
 
 GitHub finds out from the other side. The Deploy workflow (`.github/workflows/deploy.yml`) runs
 on every push to `main`, records a GitHub Deployment, and waits for `/version` on the live API to
@@ -46,6 +54,9 @@ the commit that is live), on the commit, and on the pull request that was merged
    ```
    */5 * * * * /usr/local/bin/tebonsma-api-deploy.sh >> /var/log/tebonsma-api-deploy.log 2>&1
    ```
+
+The copy in `/usr/local/bin` is not updated by the script itself: when `deploy.sh` changes in the
+repository, repeat the `install` line.
 
 Backups land in `BACKUP_DIR` (root only, since the files include `.env`) and are removed after
 `KEEP_BACKUP_DAYS` days. The nightly backup of the host should cover that folder too.
