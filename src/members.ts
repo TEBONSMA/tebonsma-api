@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { config } from './config.ts'
 import { db } from './db.ts'
-import { getProfile, listUsers, type Profile } from './lldap.ts'
+import { getProfile, listGroupMembers, listUsers, type Profile } from './lldap.ts'
 
 // How a member appears to others in the feed. The id is random, so usernames (which are
 // also the mail logins) never leave the API.
@@ -129,8 +130,10 @@ async function ensureListed() {
   return listed
 }
 
+// The members of TEBONSMA to choose from, as mail recipients or as organizers of an event:
+// the member group, so the admin and service accounts in the directory are left out
 export async function listMembers(except: string) {
-  const { usernames } = await ensureListed()
+  const usernames = await listGroupMembers(config.memberGroup)
   const members = await getMembers(usernames.filter(username => username !== except))
   return [...members.values()].sort((a, b) => a.name.localeCompare(b.name, 'nb'))
 }

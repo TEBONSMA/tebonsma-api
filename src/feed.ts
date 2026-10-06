@@ -333,16 +333,15 @@ export interface PostInput {
 }
 
 // Puts the listed uploads on the post in the given order and drops the ones left out.
-// Only uploads by the given members count (whoever is saving, and the post's author whose
-// files are already there), and never ones that belong to another post.
-function setAttachments(postId: string, owners: string[], ids: string[]) {
-  const ownerIn = owners.map(() => '?').join(', ')
+// Files already on the post stay, whichever organizer put them there; new ones must be
+// uploads by the member saving. Never files that belong to another post.
+function setAttachments(postId: string, saver: string, ids: string[]) {
   ids.forEach((id, position) => {
     const { changes } = db
       .prepare(
-        `UPDATE feed_attachments SET post_id = ?, position = ? WHERE id = ? AND owner IN (${ownerIn}) AND comment_id IS NULL AND (post_id IS NULL OR post_id = ?)`,
+        'UPDATE feed_attachments SET post_id = ?, position = ? WHERE id = ? AND comment_id IS NULL AND (post_id = ? OR (post_id IS NULL AND owner = ?))',
       )
-      .run(postId, position, id, ...owners, postId)
+      .run(postId, position, id, postId, saver)
     if (changes === 0) throw new HTTPException(400, { message: 'Et vedlegg finnes ikke lenger. Last det opp på nytt.' })
   })
   const kept = ids.map(() => '?').join(', ')
@@ -376,7 +375,7 @@ export function createPost(viewer: Viewer, rawInput: PostInput, poll: PollInput 
       input.visibility,
       now(),
     )
-    setAttachments(id, [viewer.username], input.attachmentIds)
+    setAttachments(id, viewer.username, input.attachmentIds)
     if (poll) savePoll(id, poll)
     if (input.event) {
       saveEvent(id, input.event)
@@ -404,7 +403,7 @@ export function updatePost(viewer: Viewer, id: string, rawInput: PostInput) {
 
   transaction(() => {
     db.prepare('UPDATE feed_posts SET body = ?, visibility = ?, edited_at = ? WHERE id = ?').run(input.body, input.visibility, now(), id)
-    setAttachments(id, [post.author, viewer.username], input.attachmentIds)
+    setAttachments(id, viewer.username, input.attachmentIds)
     if (input.event) saveEvent(id, input.event)
   })
   return getPost(viewer, id)
