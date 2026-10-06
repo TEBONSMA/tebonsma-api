@@ -4,6 +4,8 @@ import { bodyLimit } from 'hono/body-limit'
 import { cors } from 'hono/cors'
 import { HTTPException } from 'hono/http-exception'
 import { requireCaller, type Env } from './auth.ts'
+import { betRoutes } from './betRoutes.ts'
+import { startBots } from './bots/index.ts'
 import { config } from './config.ts'
 import { eventRoutes } from './eventRoutes.ts'
 import { feedRoutes } from './feedRoutes.ts'
@@ -11,6 +13,7 @@ import { mailRoutes } from './mailRoutes.ts'
 import { hasBackend, useBackend } from './mail/backend.ts'
 import { imapBackend } from './mail/imapBackend.ts'
 import { startScheduler } from './mail/scheduled.ts'
+import { memberRoutes } from './memberRoutes.ts'
 import { getProfile as readProfile, setAvatar, updateProfile, type ProfileChanges } from './lldap.ts'
 import { rememberProfile } from './members.ts'
 import { getLeaderboard, isGame, ScoreRejected, startRun, submitScore } from './scoreboard.ts'
@@ -130,6 +133,8 @@ app.get('/flappy/leaderboard', requireCaller, c => gameLeaderboard(c, 'flappy-te
 app.route('/', feedRoutes)
 app.route('/', eventRoutes)
 app.route('/', mailRoutes)
+app.route('/', betRoutes)
+app.route('/', memberRoutes)
 
 app.onError((err, c) => {
   if (err instanceof HTTPException) return c.json({ error: err.message }, err.status)
@@ -147,3 +152,5 @@ startScheduler()
 serve({ fetch: app.fetch, port: config.port }, info => {
   console.log(`tebonsma-api listening on port ${info.port}`)
 })
+
+startBots()

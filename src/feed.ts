@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { HTTPException } from 'hono/http-exception'
 import { db, transaction } from './db.ts'
+import { voidEventMarkets } from './bets.ts'
 import { eventOf, isEvent, saveEvent, type EventInput } from './events.ts'
 import { getMembers, type PublicMember } from './members.ts'
 
@@ -66,6 +67,12 @@ db.exec(`
     text     TEXT NOT NULL
   );
   CREATE INDEX IF NOT EXISTS feed_poll_options_post ON feed_poll_options (post_id);
+
+  -- Posts take their question from the text; an event's text describes the event, so its poll has its own
+  CREATE TABLE IF NOT EXISTS feed_poll_questions (
+    post_id  TEXT PRIMARY KEY REFERENCES feed_posts (id) ON DELETE CASCADE,
+    question TEXT NOT NULL
+  );
 
   CREATE TABLE IF NOT EXISTS feed_poll_votes (
     post_id   TEXT NOT NULL REFERENCES feed_posts (id) ON DELETE CASCADE,
@@ -197,7 +204,11 @@ function pollOf(postId: string, viewer: Viewer | null) {
         | { option_id: string }
         | undefined)
     : undefined
+  const question = db.prepare('SELECT question FROM feed_poll_questions WHERE post_id = ?').get(postId) as
+    | { question: string }
+    | undefined
   return {
+    question: question?.question ?? null,
     options,
     totalVotes: options.reduce((sum, option) => sum + option.votes, 0),
     myVote: mine?.option_id ?? null,
@@ -262,6 +273,31 @@ export async function listPosts(viewer: Viewer | null, sort: Sort, offset: numbe
   return { posts: await toPosts(rows.slice(0, limit), viewer), nextOffset: hasMore ? offset + limit : null }
 }
 
+// What a member has posted, newest first: their events, or everything else. Only for members,
+// who see closed posts too.
+export async function listPostsBy(viewer: Viewer, author: string, events: boolean, offset: number, limit: number) {
+  const rows = db
+    .prepare(
+      `${POST_SELECT} LEFT JOIN events e ON e.post_id = p.id
+       WHERE p.author = ? AND (e.post_id IS NOT NULL) = ?
+       ORDER BY ${events ? 'e.starts_at IS NULL DESC, e.starts_at DESC,' : ''} p.created_at DESC LIMIT ? OFFSET ?`,
+    )
+    .all(author, events ? 1 : 0, limit + 1, offset) as unknown as PostRow[]
+
+  const hasMore = rows.length > limit
+  return { posts: await toPosts(rows.slice(0, limit), viewer), nextOffset: hasMore ? offset + limit : null }
+}
+
+export function countPostsBy(author: string) {
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS total, COUNT(e.post_id) AS events FROM feed_posts p
+       LEFT JOIN events e ON e.post_id = p.id WHERE p.author = ?`,
+    )
+    .get(author) as { total: number; events: number }
+  return { posts: row.total - row.events, events: row.events }
+}
+
 const MAX_EVENTS_LISTED = 200
 
 // Events in the order they take place, the ones without a date last. With a period, only
@@ -303,7 +339,19 @@ function setAttachments(postId: string, owner: string, ids: string[]) {
   db.prepare(`DELETE FROM feed_attachments WHERE post_id = ? AND id NOT IN (${kept})`).run(postId, ...ids)
 }
 
-export function createPost(viewer: Viewer, input: PostInput, pollOptions: string[]) {
+export interface PollInput {
+  question: string | null
+  options: string[]
+}
+
+function savePoll(postId: string, poll: PollInput) {
+  if (poll.question) db.prepare('INSERT INTO feed_poll_questions (post_id, question) VALUES (?, ?)').run(postId, poll.question)
+  poll.options.forEach((text, position) => {
+    db.prepare('INSERT INTO feed_poll_options (id, post_id, position, text) VALUES (?, ?, ?, ?)').run(randomUUID(), postId, position, text)
+  })
+}
+
+export function createPost(viewer: Viewer, input: PostInput, poll: PollInput | null) {
   const id = randomUUID()
   transaction(() => {
     db.prepare('INSERT INTO feed_posts (id, author, body, visibility, created_at) VALUES (?, ?, ?, ?, ?)').run(
@@ -314,9 +362,7 @@ export function createPost(viewer: Viewer, input: PostInput, pollOptions: string
       now(),
     )
     setAttachments(id, viewer.username, input.attachmentIds)
-    pollOptions.forEach((text, position) => {
-      db.prepare('INSERT INTO feed_poll_options (id, post_id, position, text) VALUES (?, ?, ?, ?)').run(randomUUID(), id, position, text)
-    })
+    if (poll) savePoll(id, poll)
     if (input.event) {
       saveEvent(id, input.event)
       announce('event', viewer.username, id, input.event.title)
@@ -344,7 +390,11 @@ export function deletePost(viewer: Viewer, id: string) {
   if (post.author !== viewer.username && !viewer.admin) {
     throw new HTTPException(403, { message: 'Du kan bare slette egne innlegg' })
   }
-  db.prepare('DELETE FROM feed_posts WHERE id = ?').run(id)
+  transaction(() => {
+    // Bets on an event are paid back before it goes
+    voidEventMarkets(id)
+    db.prepare('DELETE FROM feed_posts WHERE id = ?').run(id)
+  })
 }
 
 export function setPinned(viewer: Viewer, id: string, pinned: boolean) {
@@ -374,6 +424,18 @@ async function likers(table: string, column: string, id: string): Promise<Public
 export function getPostLikers(viewer: Viewer, id: string) {
   findPost(viewer, id)
   return likers('feed_post_likes', 'post_id', id)
+}
+
+// Whoever arranges the event can add a poll to it, to settle what is still open. Once.
+export function addEventPoll(viewer: Viewer, id: string, poll: PollInput) {
+  const post = findPost(viewer, id)
+  if (!isEvent(id)) throw new HTTPException(404, { message: 'Arrangementet finnes ikke' })
+  if (post.author !== viewer.username) throw new HTTPException(403, { message: 'Bare den som arrangerer kan legge til en spørreundersøkelse' })
+  transaction(() => {
+    if (pollOf(id, viewer)) throw new HTTPException(400, { message: 'Arrangementet har allerede en spørreundersøkelse' })
+    savePoll(id, poll)
+  })
+  return pollOf(id, viewer)
 }
 
 // One vote per member. Passing no option takes the vote back.

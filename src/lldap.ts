@@ -80,6 +80,12 @@ const USERS_QUERY = `
   }
 `
 
+const MEMBERS_QUERY = `
+  query Members($group: String!) {
+    users(filters: { memberOf: $group }) { id }
+  }
+`
+
 const UPDATE_MUTATION = `
   mutation Update($user: UpdateUserInput!) {
     updateUser(user: $user) { ok }
@@ -136,6 +142,12 @@ export async function listUsers(): Promise<Profile[]> {
     groups: user.groups.map(g => g.displayName),
     createdAt: user.creationDate,
   }))
+}
+
+// The usernames of everyone in a group
+export async function listGroupMembers(group: string) {
+  const { users } = await graphql<{ users: { id: string }[] }>(MEMBERS_QUERY, { group })
+  return users.map(user => user.id)
 }
 
 export async function updateProfile(username: string, changes: ProfileChanges) {

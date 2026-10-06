@@ -2,7 +2,8 @@
 
 Small HTTP API for tebonsma.no. It lets logged-in members view and edit their own account
 in LLDAP (the site's `/konto` page), keeps the scoreboards for the site's games, runs
-the news feed (`/feed`), and is the back end of the webmail on the site (`/mail`).
+the news feed (`/feed`), is the backend of TebBet, the members' betting site at
+bet.tebonsma.no, and is the back end of the webmail on the site (`/mail`).
 
 ## How it works
 
@@ -40,7 +41,7 @@ a login and then return only public posts; everything else needs a member's toke
 |---|---|---|
 | GET | `/feed/posts?sort=&offset=&limit=` | A page of posts, pinned ones first. `sort` is `new`, `old`, `likes` or `comments` |
 | GET | `/feed/posts/:id` | One post |
-| POST | `/feed/posts` | Write a post: `{ body, visibility, attachmentIds, pollOptions }`. With `event: { title, location, startsAt, endsAt }` the post is an event, and every member is notified |
+| POST | `/feed/posts` | Write a post: `{ body, visibility, attachmentIds, pollOptions }`. With `event: { title, location, startsAt, endsAt }` the post is an event, and every member is notified. An event's poll also needs `pollQuestion`, since its text describes the event |
 | PATCH | `/feed/posts/:id` | Edit own post: `{ body, visibility, attachmentIds }`, and `event` when it is one |
 | DELETE | `/feed/posts/:id` | Delete own post (admins: any post) |
 | PUT, DELETE | `/feed/posts/:id/like` | Like or unlike |
@@ -64,6 +65,11 @@ a login and then return only public posts; everything else needs a member's toke
 | PUT | `/events/:id/rsvp` | Answer a closed (`members`) event: `{ answer }` is `yes`, `no`, or `null` to take it back |
 | GET | `/events/:id/rsvps` | Who answered what |
 | POST | `/events/:id/announcements` | Message from the organizer to every member: `{ body }` |
+| POST | `/events/:id/poll` | The organizer adds a poll to an event that has none: `{ question, pollOptions }` |
+| GET | `/calendar.ics` | The public events as an iCalendar feed for calendar apps to subscribe to |
+| GET | `/calendar/:secret.ics` | A member's feed, with the closed events too. No login; the secret in the address is the key |
+| GET | `/me/calendar` | Where the caller's own feed is: `{ path }`. Made the first time it is asked for |
+| POST | `/me/calendar` | Give the caller's feed a new address, so the old one stops working |
 
 - **Admins** are members of the `ADMIN_GROUP` group. Only they can pin posts and see
   reports, and they can delete other members' posts and comments.
@@ -75,9 +81,120 @@ a login and then return only public posts; everything else needs a member's toke
   edited and deleted like any post. Only closed (`members`) events have sign-up, and it
   closes when the event is over. Whether an event is planned, on or done follows from its
   times and isn't stored.
+- **Calendar feeds** hold the dated events from the last year on. Calendar apps fetch them
+  again on their own (Google roughly once or twice a day), so changes follow. A member's
+  feed is checked against LLDAP, and stops answering when the account is gone.
 - **Files** are stored in the database. JPEG, PNG, GIF and WebP are shown as pictures;
   anything else is only offered as a download. An upload that isn't put in a post within a
   day is deleted. A poll can't be changed once the post is published.
+
+### TebBet
+
+Members bet TEB coins, which are only for fun, on things that may happen at an event. Every
+member starts with 1 000 coins the first time they open TebBet and gets 100 more every Monday
+(Norwegian time). Everything under `/bet` needs a login.
+
+A **market** is a question: yes/no, two to ten named outcomes of which one comes true, two to
+ten of which several can (multi, like who ends up on the cleaning crew; every right pick wins),
+or over/under, where members pick a line on a count (like 4,5 beers) and bet over or under it. Markets on an event are run
+(opened, closed, decided, called off, reopened) by the event's organizer and admins; the
+organizer can turn betting off for an event (`event.betting` on the post), which hides it from
+TebBet. Markets that aren't about an event are in **groups**, like "Andre spill" and
+"Sponsorer", which admins make, rename and run; admins also set the order of events and groups
+on the front page. The group "Landslaget" is filled by the bot (below). Whoever opens a market can
+keep members out of it, typically the one it is about: they see it but can't play on it, and
+bets they placed before stand. A **slip** is one bet:
+a stake on one outcome (single), or on outcomes in several markets that must all happen
+(combination, odds multiplied). Odds are locked when a slip is played. When a market is
+decided, slips are paid at once; when it is called off, or its event deleted, stakes are paid
+back, and in a combination it counts as odds 1,00. Reopening a decided market takes what it
+paid back out again.
+
+| Method | Path | Does |
+|---|---|---|
+| GET | `/bet/me` | Own balance, coins in play and the next Monday |
+| GET | `/bet/events` | Coming events and recent results, with their markets and current odds |
+| GET | `/bet/events/:id` | One event, every market on it and the latest bets |
+| GET | `/bet/groups` | Every group with its markets, and `front`: where admins have put events and groups on the front page (`event:<id>`, `group:<id>`) |
+| GET | `/bet/groups/:id` | One group, its markets and the latest bets (`/bet/other` is "Andre spill", for the site before groups) |
+| POST, PATCH, DELETE | `/bet/groups`, `/bet/groups/:id` | Make a group (`{ title }`, its id comes from the title), rename it, or delete one that has never had markets and no bot fills (admins) |
+| PUT | `/bet/front` | The order of the front page from the top: `{ items: ['group:landslaget', 'event:<id>', …] }`. Events left out go by date among the other events, groups at the end |
+| GET | `/bet/members` | The members (`MEMBER_GROUP`), to keep out of a market or add as its outcomes |
+| POST | `/bet/events/:id/markets` | Open a market: `{ question, kind, outcomes: [{ label, odds }], closesAt, excluded }` |
+| POST | `/bet/groups/:id/markets` | Open a market in a group (admins), same body |
+| POST | `/bet/groups/:id/import` | Import up to 30 markets (admins), all checked before any is made: `{ markets: [{ …a new market, section }] }`. `excluded` may name members by their display name |
+| PATCH | `/bet/markets/:id` | Change `question`, `closesAt` or `excluded` of an undecided market |
+| POST | `/bet/events/:id/sections`, `/bet/groups/:id/sections` | Add a section heading: `{ title }` |
+| PATCH, DELETE | `/bet/sections/:id` | Rename a section (`{ title }`), or remove it; its markets stay, under no section |
+| PUT | `/bet/events/:id/layout`, `/bet/groups/:id/layout` | Order sections and markets: `{ groups: [{ sectionId, marketIds }] }`, `sectionId` null for no section |
+| POST | `/bet/markets/:id/close` | Stop betting now |
+| POST | `/bet/markets/:id/settle` | Decide it: `{ outcomeId }`, `{ outcomeIds }` (every outcome that came true, maybe none) for multi, or `{ value }` for over/under |
+| POST | `/bet/markets/:id/void` | Call it off and pay the stakes back |
+| POST | `/bet/markets/:id/reopen` | Take the decision back |
+| DELETE | `/bet/markets/:id` | Remove a market nobody has played on |
+| POST | `/bet/slips` | Play: `{ slips: [{ stake, selections }] }`, all or none. A selection is `{ outcomeId, odds }`, or `{ marketId, side, line, odds }` for over/under |
+| GET | `/bet/slips?status=open\|settled` | Own slips |
+| GET | `/bet/ledger` | Own account statement |
+| GET | `/bet/leaderboard` | Everyone who has played, by coins in hand plus coins in play. Equal totals share a `rank` (1, 1, 1, 4) |
+| GET | `/bet/members/:id?status=open\|settled` | A member's page: place on the leaderboard, coins and slips (not their account statement), and with `settled` the scratch cards they have finished |
+| GET | `/bet/flaks` | The scratch cards (price, prizes and odds, rules) and own tickets not scratched to the end |
+| GET | `/bet/flaks/done` | Own tickets scratched to the end |
+| POST | `/bet/flaks/:game/buy` | Buy a ticket; its outcome is drawn now |
+| POST | `/bet/flaks/tickets/:id/scratch` | Scratch `{ field }`, or `{}` for every field left; the last one pays the prize |
+| POST | `/bet/casino/roulette/spin` | Roulette: `{ bets: [{ type, number?, stake }] }`, settled at once |
+
+`kind` is `yesno`, `choice`, `multi` or `overunder`. A multi market also takes `winners`,
+about how many of its outcomes will come true (at least 1, fewer than the outcomes, like
+`2.5`). An over/under market takes `line` (where over and
+under start out even, like `4.5`), `lowest` and `highest` (the ends of the slider, `lowest`
+0 if left out) and `spread` (`low`, `medium` or `high`) instead of `outcomes`.
+`excluded` is a list of member ids from `/bet/members`; everyone sees who is kept out.
+`sectionId` puts a new market at the end of a section. `closesAt` left out means when the
+event starts; `null` means open until closed by hand.
+The `odds` sent with a slip are the ones the member was shown. If the odds have moved since,
+the slip is refused with 409 and the site shows the new ones.
+
+**How the odds move** (`src/odds.ts`): the organizer's opening odds are turned into
+probabilities, and from there a market maker using Hanson's logarithmic market scoring rule
+(LMSR) moves them. Every coin played on an outcome makes it likelier, so its odds fall and the
+others rise. A stake gets the average price over its own move, which is why a large stake gets
+a little less than the odds shown, and why nobody can earn coins for sure by betting on every
+side. The bank keeps 5 % of every payout. `DEFAULT_LIQUIDITY` (2 000 coins) sets how fast the
+odds move. Coins only move through the ledger table, so a balance is the sum of its rows.
+
+**Multi** markets price every outcome on its own, as a yes/no market of which only yes is
+sold. The organizer's odds are turned into probabilities that add up to `winners` (none above
+95 %), and from there each moves with what is played on it. A combination has one pick per
+market, except on a multi market, where it can pick several outcomes (all must come true) and
+their odds are multiplied like any other. Since only so many can come true, that is a little
+less than a fair price, never more.
+
+**Over/under** is the same market maker over the numbers from `lowest` to `highest`, which
+also stand for anything below and above them. Betting over 4,5 buys every number from 5 up at
+once, so the odds on all lines hang together and can't be played against each other. The
+opening chances follow a log-normal curve with the organizer's line in the middle, lopsided
+the way counts and waits are: twice the line is as likely as half of it. `spread` sets how wide
+it is (0,3, 0,6 or 1,0 on a log scale). Lines lie halfway between whole numbers, so a result is
+always over or under.
+
+**The bot** (`src/bots`) runs inside the API every ten minutes, as `tebbet-bot`, an admin that
+never plays. It fills the group **Landslaget** with Norway's men's matches from ESPN's open but
+undocumented API (no key). It opens a winner, total goals, Norway's goals and "Does Haaland
+score?" market per match when the bookmaker's odds (DraftKings, in the match summary at ESPN)
+show up, at most two weeks ahead, turned into chances without the bookmaker's margin. Without
+them three days before kickoff it opens with odds from the Elo ratings at eloratings.net.
+Betting stops at kickoff and follows the match if it is moved. Goals are those of normal time;
+a cancelled match is called off, and so is the scorer market if the player doesn't play. What
+the bot found is kept with the market (`note`, `noteUrl`) and shown with it, and so is how it
+decides (`autoRule`). If an admin reopens a market the bot decided, the bot leaves it to them.
+`BOTS=off` keeps the bot from running.
+
+**Flaks** (`src/flaks.ts`, `src/flaksGames.ts`) are games of pure luck that settle at once:
+scratch cards and roulette. A scratch card's prize is drawn by its odds when it is bought, like
+a real one, and its fields are laid out to show it; they stay on the server until scratched. The
+cards follow Norsk Tipping's Flax cards of the same price (prices, top prizes and their odds,
+how often a ticket wins) and pay back 55-59 % of the stakes. Coins move through the ledger as
+`casino-stake` and `casino-payout`, with the game and what happened.
 
 ### Game scoreboards
 
@@ -226,10 +343,14 @@ This is set up on the server, not in this repository:
 | `LLDAP_PASSWORD` | required | Service account password |
 | `LLDAP_URL` | `http://lldap:17170` | LLDAP's HTTP address |
 | `OIDC_USERINFO_URL` | `https://auth.tebonsma.no/api/oidc/userinfo` | Where tokens are checked |
-| `ALLOWED_ORIGINS` | `https://tebonsma.no` | Comma-separated sites allowed to call the API (CORS) |
+| `SITE_URL` | `https://tebonsma.no` | Where the site is, for links to events in the calendar feeds |
+| `ALLOWED_ORIGINS` | `https://tebonsma.no` | Comma-separated sites allowed to call the API (CORS). TebBet needs `https://bet.tebonsma.no` here too |
 | `PORT` | `8080` | Port to listen on |
 | `DATA_DIR` | `./data` (`/app/data` in Docker) | Folder for the SQLite database |
 | `ADMIN_GROUP` | `lldap_admin` | Group whose members moderate the feed |
+| `MEMBER_GROUP` | `medlemmer` | Group of the members of TEBONSMA, for TebBet's list of members |
+| `BOTS` | on | `off` keeps TebBet's bot from running (it is off in `npm run dev:mock` unless started with `--bots`) |
+| `BOT_ODDS_DAYS`, `BOT_ELO_DAYS` | `14`, `3` | Days before kickoff the bot looks for bookmaker odds, and opens with Elo odds without them. Larger values let you try it out |
 | `MAIL_IMAP_HOST`, `MAIL_IMAP_PORT` | `mail.tebonsma.no`, `993` | Where mail is read (TLS from the start) |
 | `MAIL_SMTP_HOST`, `MAIL_SMTP_PORT` | `mail.tebonsma.no`, `465` | Where mail is sent |
 | `MAIL_SIEVE_HOST`, `MAIL_SIEVE_PORT` | `mail.tebonsma.no`, `4190` | ManageSieve, for the auto-reply |
@@ -295,8 +416,9 @@ The mock's login page has no passwords. You pick who to log in as:
 
 | User | Groups | For testing |
 |---|---|---|
-| `dev` | `tebonsma` | An ordinary member |
-| `admin` | `tebonsma`, `lldap_admin` | What admins see |
+| `dev` | `medlemmer` | An ordinary member |
+| `kari`, `ola` | `medlemmer` | More members, for TebBet and keeping members out of markets |
+| `admin` | `lldap_admin` | What admins see |
 
 Profile edits, scores and the feed are reset when the server restarts, which also happens
 when you save a file. The same goes for mail: both users start with a few mails, including a
@@ -306,7 +428,13 @@ mail server to set up, and mail between `dev` and `admin` is delivered, auto-rep
 keep scores and the feed between restarts. Add or change users in `dev/mock-auth.ts`.
 
 To use it from the site, run `npm run dev:mock` in the Tebonsma.no repo's `teb-app` folder
-as well. To call the API directly, the access token is `mock-access.<username>`:
+as well, and for TebBet in the tebbet repo (it runs on port 5174; both ports are allowed).
+
+`npm run dev:mock:demo` does the same and adds three example events with TebBet markets and
+a few bets: one coming up next week (with an over/under market Dev Bruker is kept out of and
+a multi market), one
+in two days, and one that is over, with a decided market and one waiting for its result. There
+is also a market in the group "Andre spill". To call the API directly, the access token is `mock-access.<username>`:
 
 ```bash
 curl -H "Authorization: Bearer mock-access.dev" http://localhost:8787/me

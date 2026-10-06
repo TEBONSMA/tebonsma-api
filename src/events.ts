@@ -1,4 +1,5 @@
 import { HTTPException } from 'hono/http-exception'
+import { hasOpenMarkets } from './bets.ts'
 import { db } from './db.ts'
 import { getMembers, type PublicMember } from './members.ts'
 import type { Viewer, Visibility } from './feed.ts'
@@ -14,6 +15,8 @@ export interface EventInput {
   // Both or neither; an event without them has no date yet
   startsAt: string | null
   endsAt: string | null
+  // Whether members can bet on it on TebBet. Left out when editing: stays as it was.
+  betting?: boolean
 }
 
 db.exec(`
@@ -22,7 +25,8 @@ db.exec(`
     title     TEXT NOT NULL,
     location  TEXT NOT NULL,
     starts_at TEXT,
-    ends_at   TEXT
+    ends_at   TEXT,
+    betting   INTEGER NOT NULL DEFAULT 1
   );
   CREATE INDEX IF NOT EXISTS events_starts ON events (starts_at);
 
@@ -35,24 +39,41 @@ db.exec(`
   );
 `)
 
+// Betting came after the first events were made; they were open for it
+const eventColumns = db.prepare('PRAGMA table_info(events)').all() as { name: string }[]
+if (!eventColumns.some(column => column.name === 'betting')) {
+  db.exec('ALTER TABLE events ADD COLUMN betting INTEGER NOT NULL DEFAULT 1')
+}
+
 interface EventRow {
   title: string
   location: string
   starts_at: string | null
   ends_at: string | null
+  betting: number
 }
 
 const findEvent = (postId: string) =>
-  db.prepare('SELECT title, location, starts_at, ends_at FROM events WHERE post_id = ?').get(postId) as EventRow | undefined
+  db.prepare('SELECT title, location, starts_at, ends_at, betting FROM events WHERE post_id = ?').get(postId) as
+    | EventRow
+    | undefined
 
 // Runs inside the transaction that saves the post
 export function saveEvent(postId: string, input: EventInput) {
+  const before = findEvent(postId)
+  const betting = input.betting ?? (before ? before.betting === 1 : true)
+  if (!betting && hasOpenMarkets(postId)) {
+    throw new HTTPException(400, {
+      message: 'Arrangementet har spill på TebBet som ikke er avgjort. Avgjør eller annuller dem der før du slår av spill.',
+    })
+  }
+
   db.prepare(`
-    INSERT INTO events (post_id, title, location, starts_at, ends_at) VALUES (?, ?, ?, ?, ?)
+    INSERT INTO events (post_id, title, location, starts_at, ends_at, betting) VALUES (?, ?, ?, ?, ?, ?)
     ON CONFLICT (post_id) DO UPDATE SET
       title = excluded.title, location = excluded.location,
-      starts_at = excluded.starts_at, ends_at = excluded.ends_at
-  `).run(postId, input.title, input.location, input.startsAt, input.endsAt)
+      starts_at = excluded.starts_at, ends_at = excluded.ends_at, betting = excluded.betting
+  `).run(postId, input.title, input.location, input.startsAt, input.endsAt, betting ? 1 : 0)
 }
 
 export const isEvent = (postId: string) => !!findEvent(postId)
@@ -71,7 +92,14 @@ export function eventOf(postId: string, viewer: Viewer | null, visibility: Visib
       | undefined
     rsvp = { yes: count('yes'), no: count('no'), mine: mine?.answer ?? null }
   }
-  return { title: row.title, location: row.location, startsAt: row.starts_at, endsAt: row.ends_at, rsvp }
+  return {
+    title: row.title,
+    location: row.location,
+    startsAt: row.starts_at,
+    endsAt: row.ends_at,
+    betting: row.betting === 1,
+    rsvp,
+  }
 }
 
 // The caller has already checked that the viewer can see the post. Passing no answer

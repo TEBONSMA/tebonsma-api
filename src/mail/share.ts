@@ -254,6 +254,6 @@ export async function shareToFeed(account: Account, viewer: Viewer, id: string, 
     }
   }
 
-  const post = await createPost(viewer, { body: `${lead}${text}`, visibility: share.visibility, attachmentIds, event: null }, [])
+  const post = await createPost(viewer, { body: `${lead}${text}`, visibility: share.visibility, attachmentIds, event: null }, null)
   return { post, skipped }
 }

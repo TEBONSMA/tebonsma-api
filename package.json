@@ -11,6 +11,7 @@
     "start": "node src/server.ts",
     "dev": "node --watch src/server.ts",
     "dev:mock": "node --watch dev/server.ts",
+    "dev:mock:demo": "node --watch dev/server.ts --demo",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

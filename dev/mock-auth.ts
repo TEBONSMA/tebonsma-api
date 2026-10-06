@@ -27,7 +27,31 @@ const users = new Map<string, MockUser>([
       firstName: 'Dev',
       lastName: 'Bruker',
       avatar: null,
-      groups: ['tebonsma'],
+      groups: ['medlemmer'],
+      createdAt: '2025-01-01T12:00:00Z',
+    },
+  ],
+  [
+    'kari',
+    {
+      email: 'kari@tebonsma.test',
+      displayName: 'Kari Nordmann',
+      firstName: 'Kari',
+      lastName: 'Nordmann',
+      avatar: null,
+      groups: ['medlemmer'],
+      createdAt: '2025-01-01T12:00:00Z',
+    },
+  ],
+  [
+    'ola',
+    {
+      email: 'ola@tebonsma.test',
+      displayName: 'Ola Nordmann',
+      firstName: 'Ola',
+      lastName: 'Nordmann',
+      avatar: null,
+      groups: ['medlemmer'],
       createdAt: '2025-01-01T12:00:00Z',
     },
   ],
@@ -39,7 +63,7 @@ const users = new Map<string, MockUser>([
       firstName: 'Admin',
       lastName: 'Bruker',
       avatar: null,
-      groups: ['tebonsma', 'lldap_admin'],
+      groups: ['lldap_admin'],
       createdAt: '2025-01-01T12:00:00Z',
     },
   ],
@@ -210,6 +234,7 @@ export function startMockAuth(port: number) {
       query?: string
       variables?: {
         id?: string
+        group?: string
         user?: {
           id: string
           displayName?: string
@@ -234,6 +259,11 @@ export function startMockAuth(port: number) {
           })),
         },
       })
+    }
+    // The users of one group
+    if (operation === 'Members') {
+      const members = [...users].filter(([, user]) => user.groups.includes(variables.group ?? ''))
+      return c.json({ data: { users: members.map(([id]) => ({ id })) } })
     }
     if (operation !== 'User' && operation !== 'Update') {
       return c.json({

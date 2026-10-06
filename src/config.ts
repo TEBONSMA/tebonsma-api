@@ -36,9 +36,13 @@ export const config = {
   port: Number(process.env.PORT ?? 8080),
   allowedOrigins,
   userinfoUrl,
+  // Where the site is, for links back to it from calendars
+  siteUrl: (process.env.SITE_URL ?? 'https://tebonsma.no').replace(/\/$/, ''),
   dataDir: process.env.DATA_DIR ?? './data',
   // Members of this group can pin posts, handle reports and remove other members' posts
   adminGroup: process.env.ADMIN_GROUP ?? 'lldap_admin',
+  // The members of TEBONSMA, as opposed to other accounts in the directory
+  memberGroup: process.env.MEMBER_GROUP ?? 'medlemmer',
   // Members' mailboxes. The API logs in as the member with their own access token (XOAUTH2).
   mail: {
     imapHost: process.env.MAIL_IMAP_HOST ?? 'mail.tebonsma.no',
