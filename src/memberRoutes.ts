@@ -1,7 +1,7 @@
 import { Hono, type Context } from 'hono'
 import { HTTPException } from 'hono/http-exception'
 import { requireCaller, type Env } from './auth.ts'
-import { ensureAccount, getLeaderboard, listMembers } from './bets.ts'
+import { ensureAccount, getLeaderboard } from './bets.ts'
 import { countPostsBy, listPostsBy } from './feed.ts'
 import { bad, viewerOf } from './feedRoutes.ts'
 import { getMembers, usernameOf } from './members.ts'
@@ -21,9 +21,6 @@ async function resolve(c: Context<Env>, param: string) {
   const [member] = (await getMembers([username])).values()
   return { username, member, isYou: username === own }
 }
-
-// Everyone in the member group, for choosing who to share an event with
-memberRoutes.get('/members', requireCaller, async c => c.json(await listMembers()))
 
 memberRoutes.get('/members/:id', requireCaller, async c => {
   const { username, member, isYou } = await resolve(c, c.req.param('id'))

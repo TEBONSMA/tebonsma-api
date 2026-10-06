@@ -58,7 +58,7 @@ a login and then return only public posts; everything else needs a member's toke
 | GET | `/feed/comments/:id/likes` | Who liked the comment |
 | POST | `/feed/attachments` | Upload a file (multipart field `file`, max 10 MB) to attach to a post or comment |
 | GET | `/feed/attachments/:id` | The file. Needs a login unless its post is public |
-| GET | `/members` | All members, to pick who to share an event with |
+| GET | `/members` | The members (the `MEMBER_GROUP` group) except the caller, to pick organizers and mail recipients from |
 | GET | `/members/:id/avatar` | Profile picture of a feed author |
 | GET | `/notifications` | Own notifications and the number of unread ones |
 | POST | `/notifications/read` | Mark as read: `{ ids }`, or everything without `ids` |
@@ -259,7 +259,7 @@ Everything that changes mail takes a list of ids, so one mail and a selection ar
 | POST | `/mail/messages/:id/share/feed` | Quote the mail in a feed post: `{ comment, visibility }` |
 | GET, DELETE | `/mail/shared[/:id]`, `/mail/shared/:id/attachments/:n` | Mail others have shared with the member |
 | POST | `/mail/shared/delete` | `{ ids }` |
-| GET | `/members` | Everyone with an account, as random id, name and picture. Never usernames or addresses |
+| GET | `/members` | The members (the `MEMBER_GROUP` group) except the caller, as random id, name and picture. Never usernames or addresses |
 | GET | `/notifications` | Also returns `mailUnread`, and notifications about new mail (`mail`), shared mail (`mail_share`) and scheduled mail that could not be sent (`mail_failed`) |
 
 - **Folders:** the standard ones are found through the server's special-use flags, or by

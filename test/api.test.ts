@@ -35,6 +35,14 @@ async function call<T = any>(method: string, path: string, user: string | null, 
   return { status: res.status, data, headers: res.headers }
 }
 
+// Uploads a small PNG as the given member, as the site does before a post is saved
+async function upload(user: string, name: string) {
+  const form = new FormData()
+  form.append('file', new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3])], name, { type: 'image/png' }))
+  const res = await fetch(`${API}/feed/attachments`, { method: 'POST', headers: { Authorization: `Bearer mock-access.${user}` }, body: form })
+  return (await res.json()) as { id: string }
+}
+
 // Waits until the condition holds, for things that happen on a timer in the API
 async function until<T>(read: () => Promise<T>, ok: (value: T) => boolean, seconds: number): Promise<T> {
   const end = Date.now() + seconds * 1000
@@ -210,9 +218,9 @@ describe('mail', () => {
 
   it('sends mail between members, after the undo window', async () => {
     const members = await call('GET', '/members', 'dev')
-    const admin = members.data.find((m: any) => /admin/i.test(m.name))
+    const kari = members.data.find((m: any) => /kari/i.test(m.name))
     const sent = await call('POST', '/mail/send', 'dev', {
-      to: [{ memberId: admin.id }],
+      to: [{ memberId: kari.id }],
       cc: [],
       bcc: [],
       subject: 'Hilsen fra testen',
@@ -222,13 +230,62 @@ describe('mail', () => {
     assert.equal(sent.status, 200, JSON.stringify(sent.data))
 
     const inbox = await until(
-      () => call('GET', '/mail/messages?folder=inbox', 'admin'),
+      () => call('GET', '/mail/messages?folder=inbox', 'kari'),
       reply => reply.data.messages.some((m: any) => m.subject === 'Hilsen fra testen'),
       20,
     )
     assert.ok(inbox.data.messages.some((m: any) => m.subject === 'Hilsen fra testen'), 'the mail arrived')
-    const notifications = await call('GET', '/notifications', 'admin')
+    const notifications = await call('GET', '/notifications', 'kari')
     assert.ok(notifications.data.mailUnread >= 1)
+  })
+})
+
+describe('organizers', () => {
+  const starts = new Date(Date.now() + 5 * 86_400_000).toISOString()
+  const ends = new Date(Date.now() + 5 * 86_400_000 + 3_600_000).toISOString()
+  const event = { title: 'Pubquiz', location: 'Puben', startsAt: starts, endsAt: ends }
+  let eventId: string
+  let picture: string
+
+  it('are chosen among the members, not every account', async () => {
+    const names = (await call('GET', '/members', 'dev')).data.map((m: any) => m.name)
+    assert.ok(names.includes('Kari Nordmann') && names.includes('Ola Nordmann'))
+    assert.ok(!names.includes('Dev Bruker'), 'the caller is left out')
+    assert.ok(!names.includes('Admin Bruker'), 'accounts outside the member group are left out')
+  })
+
+  it('may edit an event they were given, but not who organizes it', async () => {
+    const kari = (await call('GET', '/members', 'dev')).data.find((m: any) => /kari/i.test(m.name))
+    const made = await call('POST', '/feed/posts', 'dev', { body: 'Lag på fire', visibility: 'members', attachmentIds: [], event: { ...event, organizers: [kari.id] } })
+    assert.equal(made.status, 201)
+    assert.deepEqual(made.data.event.organizers.map((m: any) => m.name), ['Kari Nordmann'])
+    eventId = made.data.id
+
+    picture = (await upload('kari', 'kart.png')).id
+    const edited = await call('PATCH', `/feed/posts/${eventId}`, 'kari', { body: 'Lag på fire, start 19', visibility: 'members', attachmentIds: [picture], event })
+    assert.equal(edited.status, 200, JSON.stringify(edited.data))
+    assert.equal(edited.data.attachments.length, 1)
+
+    assert.equal((await call('PATCH', `/feed/posts/${eventId}`, 'kari', { body: 'x', visibility: 'members', attachmentIds: [picture], event: { ...event, organizers: [] } })).status, 403)
+    assert.equal((await call('PATCH', `/feed/posts/${eventId}`, 'ola', { body: 'x', visibility: 'members', attachmentIds: [], event })).status, 403)
+    assert.equal((await call('DELETE', `/feed/posts/${eventId}`, 'kari')).status, 403)
+  })
+
+  it('keep each other’s files when they edit', async () => {
+    const byAuthor = await call('PATCH', `/feed/posts/${eventId}`, 'dev', { body: 'Lag på fire, start 19.30', visibility: 'members', attachmentIds: [picture], event })
+    assert.equal(byAuthor.status, 200, JSON.stringify(byAuthor.data))
+    assert.equal(byAuthor.data.attachments.length, 1)
+
+    const notKaris = (await upload('ola', 'ola.png')).id
+    const withOthers = await call('PATCH', `/feed/posts/${eventId}`, 'kari', { body: 'x', visibility: 'members', attachmentIds: [picture, notKaris], event })
+    assert.equal(withOthers.status, 400, 'a new file must be the editor’s own upload')
+  })
+
+  it('run the event’s markets on TebBet, like admins', async () => {
+    const market = (user: string) =>
+      call('POST', `/bet/events/${eventId}/markets`, user, { question: 'Hvem vinner?', kind: 'choice', outcomes: [{ label: 'Lag A', odds: 2 }, { label: 'Lag B', odds: 2 }], excluded: [] })
+    assert.equal((await market('kari')).status, 201)
+    assert.equal((await market('ola')).status, 403)
   })
 })
 
