@@ -40,6 +40,11 @@ app.use(
 
 app.get('/health', c => c.json({ ok: true }))
 
+// Which commit is running, written by deploy/deploy.sh. The Deploy workflow on GitHub watches it.
+app.get('/version', c =>
+  c.json({ commit: process.env.COMMIT_SHA ?? null, deployedAt: process.env.DEPLOYED_AT ?? null }, 200, { 'Cache-Control': 'no-store' }),
+)
+
 const MAX_NAME_LENGTH = 64
 const CONTROL_CHARS = /[\u0000-\u001f\u007f]/
 

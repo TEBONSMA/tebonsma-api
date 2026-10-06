@@ -20,6 +20,7 @@ bet.tebonsma.no, and is the back end of the webmail on the site (`/mail`).
 | Method | Path | Does |
 |---|---|---|
 | GET | `/health` | Liveness check |
+| GET | `/version` | The running commit, when deployed by `deploy/deploy.sh` |
 | GET | `/me` | Own profile: username, email, names, avatar, groups |
 | PATCH | `/me` | Update `displayName`, `firstName`, `lastName` |
 | PUT | `/me/avatar` | Set profile picture, body `{ "image": "<base64 JPEG>" }`, max 512 KB |

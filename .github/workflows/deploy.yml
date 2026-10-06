@@ -1,0 +1,69 @@
+name: Deploy
+
+# The host that runs the API fetches main by itself (deploy/deploy.sh). This records that as a
+# GitHub Deployment: it waits until the live API reports the new commit on /version, and marks the
+# deployment as succeeded or failed. The host needs no GitHub credentials for that.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  deployments: write
+
+# A newer commit on main supersedes a deployment that is still being waited for
+concurrency:
+  group: deploy-production
+  cancel-in-progress: true
+
+jobs:
+  record:
+    name: Wait for the host
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION_URL: https://api.tebonsma.no/version
+      ENVIRONMENT_URL: https://api.tebonsma.no
+    steps:
+      - name: Record the deployment
+        id: deployment
+        run: |
+          id=$(gh api "repos/$GITHUB_REPOSITORY/deployments" --jq .id --input - <<EOF
+          {"ref": "$GITHUB_SHA", "environment": "production", "auto_merge": false, "required_contexts": [],
+           "production_environment": true, "description": "Fetched by the host that runs the API"}
+          EOF
+          )
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+          gh api "repos/$GITHUB_REPOSITORY/deployments/$id/statuses" --silent --input - <<EOF
+          {"state": "in_progress", "description": "Waiting for the host to pick it up", "environment_url": "$ENVIRONMENT_URL"}
+          EOF
+
+      # The host looks for new commits every five minutes and needs a minute or two to build
+      - name: Wait until the host reports the new commit
+        id: wait
+        run: |
+          for _ in $(seq 1 45); do
+            live=$(curl -sS --max-time 10 "$VERSION_URL" | jq -r '.commit // empty' 2>/dev/null || true)
+            if [ "$live" = "$GITHUB_SHA" ]; then
+              echo "The host runs $GITHUB_SHA"
+              exit 0
+            fi
+            echo "The host runs ${live:-an unknown commit}; waiting"
+            sleep 20
+          done
+          echo "The host did not report $GITHUB_SHA within 15 minutes"
+          exit 1
+
+      - name: Report the outcome
+        if: always()
+        run: |
+          case "${{ job.status }}" in
+            cancelled) state=inactive; text="Superseded by a newer commit" ;;
+            *) if [ "${{ steps.wait.outcome }}" = success ]; then state=success; text="Live on the host"
+               else state=failure; text="The host did not report this commit; see its deploy log"; fi ;;
+          esac
+          gh api "repos/$GITHUB_REPOSITORY/deployments/${{ steps.deployment.outputs.id }}/statuses" --silent --input - <<EOF
+          {"state": "$state", "description": "$text", "environment_url": "$ENVIRONMENT_URL"}
+          EOF

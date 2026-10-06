@@ -3,7 +3,11 @@ services:
     build: .
     container_name: tebonsma-api
     restart: unless-stopped
-    env_file: .env
+    env_file:
+      - .env
+      # Written by deploy/deploy.sh; the API reports it on /version
+      - path: version.env
+        required: false
     environment:
       PORT: "8080"
       LLDAP_URL: http://lldap:17170
