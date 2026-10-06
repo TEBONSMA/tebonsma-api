@@ -431,7 +431,9 @@ Set the variables from the table in your shell, then start it. It restarts on fi
 npm run dev
 ```
 
-`npm run typecheck` checks types without running anything.
+`npm run typecheck` checks types without running anything. `npm test` starts the API against the
+mock login, directory and mail server on spare ports and calls it the way the site does; CI runs
+both on every pull request.
 
 ### Without Authelia and LLDAP (mock auth)
 

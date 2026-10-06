@@ -12,7 +12,8 @@
     "dev": "node --watch src/server.ts",
     "dev:mock": "node --watch dev/server.ts",
     "dev:mock:demo": "node --watch dev/server.ts --demo",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --test test/api.test.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.19.0",
