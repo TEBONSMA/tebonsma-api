@@ -35,9 +35,11 @@ import {
   type Sort,
   type Viewer,
 } from './feed.ts'
+import { markMailNotificationsRead } from './mail/notifications.ts'
+import { pollMail } from './mail/poll.ts'
 import { getAvatar } from './members.ts'
 
-const MAX_POST_LENGTH = 5000
+export const MAX_POST_LENGTH = 5000
 const MAX_COMMENT_LENGTH = 2000
 const MAX_REASON_LENGTH = 500
 const MAX_POLL_OPTIONS = 6
@@ -45,6 +47,7 @@ const MAX_POLL_OPTION_LENGTH = 80
 const MAX_EVENT_TITLE_LENGTH = 120
 const MAX_EVENT_LOCATION_LENGTH = 200
 const PAGE_SIZE = 10
+const NOTIFICATIONS_SHOWN = 30
 const MAX_PAGE_SIZE = 30
 
 const toViewer = (caller: Caller): Viewer => ({ username: caller.username, admin: isAdmin(caller) })
@@ -262,7 +265,7 @@ feedRoutes.post(
 )
 
 // Uploaded files are never run or rendered as pages, whatever they contain
-const UPLOAD_HEADERS = {
+export const UPLOAD_HEADERS = {
   'X-Content-Type-Options': 'nosniff',
   'Content-Security-Policy': "default-src 'none'; sandbox",
 }
@@ -292,11 +295,18 @@ feedRoutes.get('/members/:id/avatar', c => {
 
 // --- Notifications ---
 
-feedRoutes.get('/notifications', requireCaller, async c => c.json(await listNotifications(viewerOf(c))))
+// The feed's notifications and the mail's side by side, newest first. mailUnread is for the menu.
+feedRoutes.get('/notifications', requireCaller, async c => {
+  const feed = await listNotifications(viewerOf(c))
+  const mail = await pollMail(c.get('caller').username, c.get('token'))
+  const items = [...feed.items, ...mail.items].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, NOTIFICATIONS_SHOWN)
+  return c.json({ unread: feed.unread + mail.unread, mailUnread: mail.mailUnread, items })
+})
 
 feedRoutes.post('/notifications/read', requireCaller, async c => {
   const { ids = null } = await readBody(c)
   if (ids !== null && (!Array.isArray(ids) || ids.some(id => typeof id !== 'string'))) throw bad('Ugyldig forespørsel')
   markNotificationsRead(viewerOf(c), ids as string[] | null)
+  markMailNotificationsRead(c.get('caller').username, ids as string[] | null)
   return c.json({ ok: true })
 })

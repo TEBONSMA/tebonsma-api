@@ -9,6 +9,10 @@ import { startBots } from './bots/index.ts'
 import { config } from './config.ts'
 import { eventRoutes } from './eventRoutes.ts'
 import { feedRoutes } from './feedRoutes.ts'
+import { mailRoutes } from './mailRoutes.ts'
+import { hasBackend, useBackend } from './mail/backend.ts'
+import { imapBackend } from './mail/imapBackend.ts'
+import { startScheduler } from './mail/scheduled.ts'
 import { memberRoutes } from './memberRoutes.ts'
 import { getProfile as readProfile, setAvatar, updateProfile, type ProfileChanges } from './lldap.ts'
 import { rememberProfile } from './members.ts'
@@ -128,6 +132,7 @@ app.get('/flappy/leaderboard', requireCaller, c => gameLeaderboard(c, 'flappy-te
 
 app.route('/', feedRoutes)
 app.route('/', eventRoutes)
+app.route('/', mailRoutes)
 app.route('/', betRoutes)
 app.route('/', memberRoutes)
 
@@ -139,6 +144,10 @@ app.onError((err, c) => {
 })
 
 app.notFound(c => c.json({ error: 'Finnes ikke' }, 404))
+
+// The real mail server, unless a stand-in was registered first (npm run dev:mock does)
+if (!hasBackend()) useBackend(imapBackend)
+startScheduler()
 
 serve({ fetch: app.fetch, port: config.port }, info => {
   console.log(`tebonsma-api listening on port ${info.port}`)

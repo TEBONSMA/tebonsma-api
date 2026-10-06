@@ -2,8 +2,8 @@
 
 Small HTTP API for tebonsma.no. It lets logged-in members view and edit their own account
 in LLDAP (the site's `/konto` page), keeps the scoreboards for the site's games, runs
-the news feed (`/feed`), and is the backend of TebBet, the members' betting site at
-bet.tebonsma.no.
+the news feed (`/feed`), is the backend of TebBet, the members' betting site at
+bet.tebonsma.no, and is the back end of the webmail on the site (`/mail`).
 
 ## How it works
 
@@ -213,6 +213,152 @@ issued:
 This stops casual cheating, not a determined player. To add a game, give it an entry in
 `GAMES` in `src/scoreboard.ts`. Scores live in a SQLite database in `DATA_DIR`.
 
+### Mail
+
+Members read and write the mail in their own `@tebonsma.no` mailbox on the site. The API
+is not a mail server: it talks to the one that is already there, Dovecot for reading and
+filing mail and Postfix for sending, and it does so **as the member**, logging in to their
+mailbox with the same access token the member uses for everything else (OAuth2, `XOAUTH2`).
+Dovecot checks the token with the login provider, so these are the same LLDAP accounts as
+before. The API never sees a password, and no master account exists. It can only open a
+mailbox while the member is logged in on the site, or has given the permission described
+under "Sending later".
+
+Everything below needs a login. `:id` is a mail's id in the API (its folder, the folder's
+UID validity and its UID, so an id stops working if the server rebuilds the folder).
+Everything that changes mail takes a list of ids, so one mail and a selection are the same call.
+
+| Method | Path | Does |
+|---|---|---|
+| GET | `/mail/folders` | Folders with unread counts, the member's labels, and the count of shared mail |
+| POST | `/mail/folders` | New folder: `{ name }` |
+| GET | `/mail/messages?folder=&q=&from=&to=&subject=&unread=&flagged=&attachment=&label=&since=&before=&sort=&offset=&limit=` | A page of mail. `folder` is a folder key (`inbox`, `sent`, `drafts`, `archive`, `junk`, `trash`, `snoozed`, `scheduled`, or one of the member's own), or `all`, `favorites`, `unread` or `shared`. `sort` is `new`, `old`, `sender`, `subject` or `size` |
+| GET | `/mail/messages/:id` | One mail, cleaned for showing (marks it as read). `?images=1` keeps pictures from other sites |
+| GET | `/mail/threads/:id` | The whole conversation the mail is part of, oldest first (marks it as read) |
+| GET | `/mail/messages/:id/attachments/:n` | An attachment |
+| GET | `/mail/messages/:id/compose?mode=` | What a new mail starts with: `reply`, `replyAll`, `forward` or `draft` |
+| POST | `/mail/messages/flags` | `{ ids, seen?, flagged? }` |
+| POST | `/mail/messages/labels` | `{ ids, add, remove }` |
+| POST | `/mail/messages/move` | `{ ids, folder }`, or `{ ids, restore: true }` for mail in the bin |
+| POST | `/mail/messages/snooze` | `{ ids, until }`, where `until: null` takes snoozing off |
+| POST | `/mail/messages/delete` | Delete for good (only from the bin) |
+| POST | `/mail/trash/empty` | Empty the bin |
+| GET, POST, PATCH, DELETE | `/mail/labels[/:id]` | Labels: a name and a colour |
+| POST | `/mail/uploads` | Attach a file to a mail being written (multipart field `file`, up to 25 MB) |
+| GET, DELETE | `/mail/uploads/:id` | Read or remove such a file |
+| PUT, DELETE | `/mail/drafts/:id` | Save or discard a draft. The id is made by the site |
+| POST | `/mail/send` | `{ to, cc, bcc, subject, html, uploadIds, draftId?, replyTo?, forwardOf?, threading?, sendAt? }`. Each recipient is an address or `{ memberId }`. Returns `{ outboxId, sendAt, draftId }`, or `{ scheduledId, sendAt }` when `sendAt` is given |
+| DELETE | `/mail/outbox/:id` | Take sending back while there is still time |
+| PATCH, DELETE | `/mail/scheduled/:id` | New time for a scheduled mail, or take it back to Drafts. `:id` is its id in the Scheduled folder |
+| GET, DELETE | `/mail/offline` | Whether the member has given the permission for sending later, or take it back |
+| POST | `/mail/offline/start`, `/mail/offline/callback` | Give the permission (see below) |
+| GET, PUT | `/mail/auto-reply` | The auto-reply |
+| GET, PUT | `/mail/settings` | `{ signature, undoSeconds, conversations }` |
+| POST | `/mail/messages/:id/share/member` | Share a copy with a member: `{ memberId, note }` |
+| POST | `/mail/messages/:id/share/feed` | Quote the mail in a feed post: `{ comment, visibility }` |
+| GET, DELETE | `/mail/shared[/:id]`, `/mail/shared/:id/attachments/:n` | Mail others have shared with the member |
+| POST | `/mail/shared/delete` | `{ ids }` |
+| GET | `/members` | Everyone with an account, as random id, name and picture. Never usernames or addresses |
+| GET | `/notifications` | Also returns `mailUnread`, and notifications about new mail (`mail`), shared mail (`mail_share`) and scheduled mail that could not be sent (`mail_failed`) |
+
+- **Folders:** the standard ones are found through the server's special-use flags, or by
+  name, and made when they are first needed. Snoozed and Scheduled are folders of our own.
+- **Labels** are a keyword on the mail on the server (`$teb_<id>`), so other mail clients see
+  them. Names and colours only exist here.
+- **Reading** cleans every mail: no script, forms, frames or event handlers. Pictures from
+  other sites are left out until the member asks for them, since loading them tells the
+  sender the mail was opened. Pictures that came with the mail are shown. The site shows it
+  in a sandboxed frame as a second wall.
+- **Writing** is rich text (paragraphs, bold, italic, underline, lists, quotes, links). The
+  HTML is cleaned again before sending, and every mail also gets a plain text version.
+  Subjects can't carry line breaks, a mail has at most 50 recipients, and a member can send
+  60 mails an hour. Blind copy is kept in the saved copy, never on what is sent.
+- **Conversations** are put together here from the mails' own `Message-ID`, `In-Reply-To` and
+  `References`, so they also work across folders (the replies in Sent). Replies with the same
+  subject within 30 days count as one conversation even when the references are missing.
+- **Snoozing** moves the mail to a folder and brings it back to the inbox, unread, at the
+  time. The server has no timer for that, so it happens when the member is on the site, or
+  at the time for members who gave the permission below.
+- **The auto-reply** is a Sieve script (`tebonsma`) on the mail server, so it answers while
+  the member is logged out. Its settings are written in a comment at the top of the script.
+  If the member already had another active script, ours includes it, so their filters keep
+  working, and it is brought back when the auto-reply is turned off.
+- **Sharing** takes a copy of the mail (cleaned text, files and headers) into this API's
+  database. The API can't write in anyone else's mailbox, so the member it is shared with
+  sees the copy under "Delt med meg" and not as a mail of their own. Sharing to the feed
+  quotes the mail in a post and copies its files, as far as the feed's limits allow.
+
+#### Sending later
+
+A mail that is to go at a certain time waits in the Scheduled folder on the mail server, where
+other mail clients see it too, and a timer in the API sends it at the time. That means the API
+needs a token for the member when they are not on the site, which is the one place the API
+keeps a secret for a member:
+
+- The member says yes once (`POST /mail/offline/start`, which gives an address at the login
+  provider, and `/mail/offline/callback` when they come back). It uses a client of its own at
+  the login provider, so it doesn't touch the refresh token the browser holds.
+- The refresh token is stored encrypted (AES-256-GCM) with `MAIL_OFFLINE_KEY`, only for
+  members who said yes, and is deleted when they take the permission back
+  (`DELETE /mail/offline`) or the provider refuses it.
+- If a scheduled mail can't be sent (the permission is gone, the mail server refuses it, or
+  the hour's limit is used up) it goes to Drafts and the member gets a notification. It is
+  never dropped quietly.
+
+Without the three `MAIL_OFFLINE_*` variables the feature is off, and the rest of the mail works.
+
+#### What the mail server needs
+
+This is set up on the server, not in this repository:
+
+1. **Dovecot:** an extra `passdb { driver = oauth2 }` next to the LDAP one, with
+   `introspection_mode = auth`, `introspection_url = https://auth.tebonsma.no/api/oidc/userinfo`
+   and `username_attribute` set to the field that matches the mail login (`email` or
+   `preferred_username`). `auth_mechanisms` also gets `oauthbearer xoauth2`.
+2. **Postfix** sends through Dovecot SASL on port 465, so sending comes with it. Check that
+   `xoauth2` is offered in EHLO.
+3. **Pigeonhole / ManageSieve** (port 4190) on, reachable from the API container, with the same
+   oauth2 passdb. The API connects in plain text and switches to TLS with STARTTLS before it
+   sends the token.
+4. The API container must reach `mail.tebonsma.no` on ports 993, 465 and 4190.
+5. For sending later: a confidential OIDC client in Authelia (for example `tebonsma-mail`) with
+   the `authorization_code` and `refresh_token` grants, the scopes `openid profile email groups
+   offline_access`, and `https://tebonsma.no/mail/tillatelse` as redirect URI. Its id and
+   secret, and a 32-byte key, go in `.env`.
+
+##### With docker-mailserver
+
+Points 1 to 4 come with docker-mailserver's own settings, in its `compose.yaml`. Nothing is
+patched by hand, and the LDAP password login stays, so phone mail apps keep working:
+
+```yaml
+    environment:
+      # Logins with a website access token (XOAUTH2/OAUTHBEARER), checked with the login provider
+      - ENABLE_OAUTH2=1
+      - OAUTH2_INTROSPECTION_URL=https://auth.tebonsma.no/api/oidc/userinfo
+      # Filters and the auto-reply (Sieve). Leave 4190 out of `ports:` so only Docker reaches it
+      - ENABLE_MANAGESIEVE=1
+    networks:
+      lldap:
+        # The API reaches the mail server inside Docker, under the name its certificate is for
+        aliases:
+          - mail.tebonsma.no
+```
+
+- `ENABLE_OAUTH2` adds docker-mailserver's oauth2 passdb next to the LDAP one, with
+  `username_attribute = email` and the `oauthbearer xoauth2` mechanisms. The API and the mail
+  server must share the network the alias is on. Restart with `docker compose up -d`; mail is
+  away for under a minute.
+- Check it afterwards: the IMAP capabilities on 993 and the SMTP `EHLO` answer on 465 list
+  `XOAUTH2` and `OAUTHBEARER`, a made-up token is refused, and password logins keep appearing in
+  the mail log (`imap-login: Login: user=<…>, method=PLAIN`).
+- Authelia answers 401 without a body for a bad token, which Dovecot 2.3 reports as
+  `NO [UNAVAILABLE] Temporary authentication failure` instead of as wrong credentials. The login
+  is refused either way, but the API can't tell it from a mail server that is down, so a login
+  that has run out shows as a server error on the mail page until the member logs in again.
+  Pointing Dovecot at Authelia's token introspection endpoint instead would need a confidential
+  client of its own and `active_attribute = active` in `dovecot-oauth2.conf.ext`.
+
 ## Requirements
 
 - Node.js 22.18 or newer, which runs the TypeScript sources directly (no build step), or Docker.
@@ -220,6 +366,7 @@ This stops casual cheating, not a determined player. To add a game, give it an e
   `groups`. Tested with Authelia 4.39.
 - LLDAP 0.6 or newer, with a service account in the `lldap_admin` group. Admin rights are
   needed to edit other users' entries.
+- For mail: Dovecot, Postfix and ManageSieve set up as described under "What the mail server needs".
 
 ## Configuration
 
@@ -237,9 +384,17 @@ This stops casual cheating, not a determined player. To add a game, give it an e
 | `MEMBER_GROUP` | `medlemmer` | Group of the members of TEBONSMA, for TebBet's list of members |
 | `BOTS` | on | `off` keeps TebBet's bot from running (it is off in `npm run dev:mock` unless started with `--bots`) |
 | `BOT_ODDS_DAYS`, `BOT_ELO_DAYS` | `14`, `3` | Days before kickoff the bot looks for bookmaker odds, and opens with Elo odds without them. Larger values let you try it out |
+| `MAIL_IMAP_HOST`, `MAIL_IMAP_PORT` | `mail.tebonsma.no`, `993` | Where mail is read (TLS from the start) |
+| `MAIL_SMTP_HOST`, `MAIL_SMTP_PORT` | `mail.tebonsma.no`, `465` | Where mail is sent |
+| `MAIL_SIEVE_HOST`, `MAIL_SIEVE_PORT` | `mail.tebonsma.no`, `4190` | ManageSieve, for the auto-reply |
+| `MAIL_OFFLINE_CLIENT_ID` | none | Client id at the login provider, for sending later |
+| `MAIL_OFFLINE_CLIENT_SECRET` | none | Its secret |
+| `MAIL_OFFLINE_KEY` | none | 32-byte key (64 hex characters or base64) that stored refresh tokens are encrypted with. Make one with `openssl rand -hex 32`, and keep it: tokens written with another key can't be read |
+| `MAIL_OFFLINE_REDIRECT_URI` | `<first ALLOWED_ORIGINS>/mail/tillatelse` | Where the login provider sends the member back |
+| `MAIL_OFFLINE_AUTHORIZE_URL`, `MAIL_OFFLINE_TOKEN_URL`, `MAIL_OFFLINE_REVOKE_URL` | the provider's `/api/oidc/...` endpoints, taken from `OIDC_USERINFO_URL` | Only needed if the provider uses other addresses |
 
 Put the credentials in `.env` (see `.env.example`). It is git-ignored and should never be
-committed.
+committed. That goes for `MAIL_OFFLINE_CLIENT_SECRET` and `MAIL_OFFLINE_KEY` too.
 
 ## Running with Docker Compose
 
@@ -257,7 +412,8 @@ committed.
 The container doesn't publish a port. Put it behind a reverse proxy or tunnel that serves
 it over HTTPS. The image has a healthcheck on `/health`.
 
-The database, with the scoreboards and the feed and its files, is kept in the `data` volume,
+The database, with the scoreboards, the feed and its files, and the mail features' own data
+(labels, settings, shared mails, scheduled sends and stored permissions), is kept in the `data` volume,
 so it survives rebuilds. To back it up, copy `tebonsma.db` out of that volume.
 
 To update, get the new code in place and run `docker compose up -d --build` again. `.env`
@@ -298,7 +454,10 @@ The mock's login page has no passwords. You pick who to log in as:
 | `admin` | `lldap_admin` | What admins see |
 
 Profile edits, scores and the feed are reset when the server restarts, which also happens
-when you save a file. They are kept in `./data/mock` while it runs; set `DATA_DIR` to
+when you save a file. The same goes for mail: both users start with a few mails, including a
+conversation of three, a mail with attachments, and one with a script, a form and a picture from
+another site to check that none of it runs or loads. All mail is kept in memory, so there is no
+mail server to set up, and mail between `dev` and `admin` is delivered, auto-replies included. They are kept in `./data/mock` while it runs; set `DATA_DIR` to
 keep scores and the feed between restarts. Add or change users in `dev/mock-auth.ts`.
 
 To use it from the site, run `npm run dev:mock` in the Tebonsma.no repo's `teb-app` folder
@@ -316,8 +475,10 @@ curl -H "Authorization: Bearer mock-access.dev" http://localhost:8787/me
 
 The mock lives in `dev/`, which is not copied into the Docker image. It only listens on
 127.0.0.1 and refuses to start when `NODE_ENV` is `production`. Its user directory only
-answers the GraphQL operations the API uses today (`User` and `Update`); a new one returns
-an error until it is added to `dev/mock-auth.ts`.
+answers the GraphQL operations the API uses today (`User`, `Users` and `Update`); a new one
+returns an error until it is added to `dev/mock-auth.ts`. Sending later works against it
+too: the permission page lets you pick who to log in as, and the mail goes out at the time
+even after you have logged out.
 
 ## Security
 
@@ -325,3 +486,12 @@ an error until it is added to `dev/mock-auth.ts`.
   self-service endpoints above; don't add endpoints that act on other users.
 - Any valid access token from the OIDC provider is accepted, so only register clients
   there that you trust.
+- The mail endpoints don't change that: they only ever open the mailbox of the member whose
+  token is on the request, and nothing here acts on someone else's mailbox. Sharing is a copy
+  in this API's database, which the member it is shared with can read and nobody else.
+- The one secret kept for a member is the encrypted refresh token for sending later, and only
+  for members who have said yes. Keep `MAIL_OFFLINE_KEY` and the data volume private, and
+  remember that whoever has both can send mail as those members until the tokens are revoked.
+- Mails from others are untrusted: they are cleaned here, shown by the site in a sandboxed
+  frame, and attachments are only ever offered as downloads, with `nosniff` and a CSP that
+  allows nothing.

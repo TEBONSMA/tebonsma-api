@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { db } from './db.ts'
-import { getProfile, type Profile } from './lldap.ts'
+import { getProfile, listUsers, type Profile } from './lldap.ts'
 
 // How a member appears to others in the feed. The id is random, so usernames (which are
 // also the mail logins) never leave the API.
@@ -102,4 +102,41 @@ export const usernameOf = (id: string) =>
 export function getAvatar(id: string) {
   const row = db.prepare('SELECT avatar FROM members WHERE id = ?').get(id) as { avatar: Uint8Array | null } | undefined
   return row?.avatar ?? null
+}
+
+// Only for the API itself: a member is known to others by this random id, and it leads back
+// to the account here without anyone else seeing the username
+export function findByMemberId(id: string) {
+  const row = db.prepare('SELECT username FROM members WHERE id = ?').get(id) as { username: string } | undefined
+  return row?.username ?? null
+}
+
+// Everyone with an account, for choosing who to send a mail or share something to. Only the
+// random id, name and picture leave the API, never usernames or addresses.
+const LIST_MS = 5 * 60 * 1000
+let listed: { at: number; usernames: string[]; emails: Map<string, string> } | null = null
+
+async function ensureListed() {
+  if (!listed || Date.now() - listed.at > LIST_MS) {
+    const profiles = await listUsers()
+    for (const profile of profiles) rememberProfile(profile)
+    listed = {
+      at: Date.now(),
+      usernames: profiles.map(profile => profile.username),
+      emails: new Map(profiles.flatMap(profile => (profile.email ? [[profile.email.toLowerCase(), profile.username] as const] : []))),
+    }
+  }
+  return listed
+}
+
+export async function listMembers(except: string) {
+  const { usernames } = await ensureListed()
+  const members = await getMembers(usernames.filter(username => username !== except))
+  return [...members.values()].sort((a, b) => a.name.localeCompare(b.name, 'nb'))
+}
+
+// Whether a mail address belongs to a member, so a mail from one is shown as from them
+export async function findMemberByEmail(address: string) {
+  const username = (await ensureListed()).emails.get(address.toLowerCase())
+  return username ?? null
 }
