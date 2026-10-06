@@ -40,6 +40,11 @@ app.use(
 
 app.get('/health', c => c.json({ ok: true }))
 
+// Which commit is running, written by deploy/deploy.sh. The Deploy workflow on GitHub watches it.
+app.get('/version', c =>
+  c.json({ commit: process.env.COMMIT_SHA ?? null, deployedAt: process.env.DEPLOYED_AT ?? null }, 200, { 'Cache-Control': 'no-store' }),
+)
+
 const MAX_NAME_LENGTH = 64
 const CONTROL_CHARS = /[\u0000-\u001f\u007f]/
 
@@ -147,10 +152,13 @@ app.notFound(c => c.json({ error: 'Finnes ikke' }, 404))
 
 // The real mail server, unless a stand-in was registered first (npm run dev:mock does)
 if (!hasBackend()) useBackend(imapBackend)
-startScheduler()
+// A trial run of a new version (deploy/deploy.sh) answers requests but does nothing on its own:
+// no scheduled mail goes out and the bot stays off
+const trial = process.env.TRIAL === '1'
+if (!trial) startScheduler()
 
 serve({ fetch: app.fetch, port: config.port }, info => {
   console.log(`tebonsma-api listening on port ${info.port}`)
 })
 
-startBots()
+if (!trial) startBots()
