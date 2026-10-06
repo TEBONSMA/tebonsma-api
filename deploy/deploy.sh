@@ -4,7 +4,7 @@
 # Run from cron every few minutes. It fetches main from GitHub with a read-only deploy key and
 # does nothing while the deployed commit is the newest one. A deploy backs up the database, the
 # running image and the files, builds the new version and first tries it on a copy of the
-# database, with no traffic. Only when that answers as expected is the real container replaced,
+# database, with no network. Only when that answers as expected is the real container replaced,
 # and checked again. If anything fails, the files, the image and the database go back to how
 # they were.
 #
@@ -31,8 +31,8 @@ BRANCH=${BRANCH:-main}
 APP_DIR=${APP_DIR:-/opt/tebonsma-api}
 CONTAINER=${CONTAINER:-tebonsma-api}
 IMAGE=${IMAGE:-tebonsma-api-tebonsma-api}
-# The network the real container is on, so the trial container reaches the directory too
-DOCKER_NETWORK=${DOCKER_NETWORK:-lldap_default}
+# GitHub's SSH host keys, pinned, so the first connection can't be talked into trusting a stranger
+KNOWN_HOSTS=${KNOWN_HOSTS:-/etc/tebonsma-api-deploy/known_hosts}
 DB_FILE=${DB_FILE:-/var/lib/docker/volumes/tebonsma-api_data/_data/tebonsma.db}
 BACKUP_DIR=${BACKUP_DIR:-/opt/backups/tebonsma-api}
 STATE_DIR=${STATE_DIR:-/var/lib/tebonsma-api-deploy}
@@ -41,7 +41,8 @@ MIRROR=$STATE_DIR/repo.git
 TRIAL=$CONTAINER-trial
 
 [[ -r "$DEPLOY_KEY" ]] || { echo "deploy key $DEPLOY_KEY is missing" >&2; exit 1; }
-export GIT_SSH_COMMAND="ssh -i $DEPLOY_KEY -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+[[ -r "$KNOWN_HOSTS" ]] || { echo "GitHub's host keys $KNOWN_HOSTS are missing (deploy/github_known_hosts)" >&2; exit 1; }
+export GIT_SSH_COMMAND="ssh -i $DEPLOY_KEY -o IdentitiesOnly=yes -o UserKnownHostsFile=$KNOWN_HOSTS -o StrictHostKeyChecking=yes"
 
 log() { printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
 
@@ -134,21 +135,28 @@ tar -czf "$BACKUP_DIR/src-$STAMP.tgz" -C "$(dirname "$APP_DIR")" "$(basename "$A
 docker tag "$IMAGE:latest" "$IMAGE:rollback"
 find "$BACKUP_DIR" -type f -mtime +"$KEEP_BACKUP_DAYS" -delete
 
-# The previous commit's files go, then the new ones come, so the folder matches the commit
-if [[ -n "$DEPLOYED" ]] && git -C "$MIRROR" cat-file -e "$DEPLOYED" 2>/dev/null; then remove_tree "$DEPLOYED"; fi
+# The previous commit's files go, then the new ones come, so the folder matches the commit. The
+# first run doesn't know the previous commit, and clears the repository's folders instead.
+if [[ -n "$DEPLOYED" ]] && git -C "$MIRROR" cat-file -e "$DEPLOYED" 2>/dev/null; then
+  remove_tree "$DEPLOYED"
+else
+  log "previous commit unknown; clearing the repository's folders"
+  for dir in src dev test deploy .github; do rm -rf "${APP_DIR:?}/$dir"; done
+fi
 cp -r "$WORK/src/." "$APP_DIR/"
 # What the API reports on /version (docker-compose.yaml passes this file into the container)
 printf 'COMMIT_SHA=%s\nDEPLOYED_AT=%s\n' "$SHA" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$APP_DIR/version.env"
 (cd "$APP_DIR" && docker compose build --quiet)
 
-# A trial run of the new image on a copy of the database, with no traffic: it must start, run
-# its migrations and answer, before the real container is touched
+# A trial run of the new image on a copy of the database, with no network at all, so it can
+# reach neither members nor mail: it must start, run its migrations and answer, before the real
+# container is touched
 uid=$(docker run --rm --entrypoint id "$IMAGE:latest" -u)
 install -d -m 700 -o "$uid" "$WORK/trial"
 install -m 600 -o "$uid" "$BACKUP_DIR/db-$STAMP.db" "$WORK/trial/tebonsma.db"
 docker rm -f "$TRIAL" >/dev/null 2>&1 || true
-docker run -d --name "$TRIAL" --network "$DOCKER_NETWORK" --env-file "$APP_DIR/.env" --env-file "$APP_DIR/version.env" \
-  -e BOTS=off -v "$WORK/trial:/app/data" "$IMAGE:latest" >/dev/null
+docker run -d --name "$TRIAL" --network none --env-file "$APP_DIR/.env" --env-file "$APP_DIR/version.env" \
+  -e TRIAL=1 -e BOTS=off -v "$WORK/trial:/app/data" "$IMAGE:latest" >/dev/null
 wait_healthy "$TRIAL" || fail "the trial run of the new version did not become healthy"
 check_api "$TRIAL" || fail "the trial run of the new version does not answer as expected"
 docker rm -f "$TRIAL" >/dev/null

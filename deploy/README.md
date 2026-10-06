@@ -9,10 +9,12 @@ When `main` has moved, the script:
 1. Backs up the database (`sqlite3 .backup`), the running image (tagged `rollback`) and the files
    in `APP_DIR`.
 2. Removes the previous commit's files from `APP_DIR` and copies in the new ones, so the folder
-   matches the commit. `.env`, `version.env` and anything else the repository doesn't own stay.
+   matches the commit (the first run doesn't know the previous commit, and clears the repository's
+   folders instead). `.env`, `version.env` and anything else the repository doesn't own stay.
    The commit goes into `version.env`, and the image is built.
-3. Tries the new image first as a separate container on a copy of the database, with no traffic.
-   It has to become healthy, run its migrations and answer: `/version` reports the commit, the
+3. Tries the new image first as a separate container on a copy of the database, with no network
+   at all, so it can reach neither members nor mail. It has to become healthy, run its migrations
+   and answer: `/version` reports the commit, the
    open endpoints answer, and the member endpoints ask for a login.
 4. Only then replaces the real container, and checks it the same way, plus a database integrity
    check.
@@ -38,6 +40,7 @@ the commit that is live), on the commit, and on the pull request that was merged
    ```bash
    install -d -m 700 /etc/tebonsma-api-deploy
    ssh-keygen -t ed25519 -N '' -C 'tebonsma-api deploy' -f /etc/tebonsma-api-deploy/id_ed25519
+   install -m 644 deploy/github_known_hosts /etc/tebonsma-api-deploy/known_hosts
    install -m 755 deploy/deploy.sh /usr/local/bin/tebonsma-api-deploy.sh
    install -m 644 deploy/deploy.env.example /etc/tebonsma-api-deploy.env
    ```
@@ -54,6 +57,10 @@ the commit that is live), on the commit, and on the pull request that was merged
    ```
    */5 * * * * /usr/local/bin/tebonsma-api-deploy.sh >> /var/log/tebonsma-api-deploy.log 2>&1
    ```
+
+`github_known_hosts` pins GitHub's SSH host keys, taken from <https://api.github.com/meta>, so
+the first connection can't be talked into trusting someone else. Should GitHub ever change them,
+fetching stops until the file is updated.
 
 The copy in `/usr/local/bin` is not updated by the script itself: when `deploy.sh` changes in the
 repository, repeat the `install` line.
