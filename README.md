@@ -420,6 +420,9 @@ so it survives rebuilds. To back it up, copy `tebonsma.db` out of that volume.
 To update, get the new code in place and run `docker compose up -d --build` again. `.env`
 and the data volume are left untouched.
 
+`deploy/` has a script that does this by itself whenever `main` changes, with backups, checks
+and a rollback, and records each deploy on GitHub. See `deploy/README.md`.
+
 ## Running locally
 
 ```bash
