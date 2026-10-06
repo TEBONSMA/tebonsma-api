@@ -33,7 +33,7 @@ async function event(title: string, location: string, startsIn: number, hours: n
       attachmentIds: [],
       event: { title, location, startsAt: at(startsIn), endsAt: at(startsIn + hours) },
     },
-    [],
+    null,
   )
   return post.id
 }
