@@ -326,6 +326,39 @@ This is set up on the server, not in this repository:
    offline_access`, and `https://tebonsma.no/mail/tillatelse` as redirect URI. Its id and
    secret, and a 32-byte key, go in `.env`.
 
+##### With docker-mailserver
+
+Points 1 to 4 come with docker-mailserver's own settings, in its `compose.yaml`. Nothing is
+patched by hand, and the LDAP password login stays, so phone mail apps keep working:
+
+```yaml
+    environment:
+      # Logins with a website access token (XOAUTH2/OAUTHBEARER), checked with the login provider
+      - ENABLE_OAUTH2=1
+      - OAUTH2_INTROSPECTION_URL=https://auth.tebonsma.no/api/oidc/userinfo
+      # Filters and the auto-reply (Sieve). Leave 4190 out of `ports:` so only Docker reaches it
+      - ENABLE_MANAGESIEVE=1
+    networks:
+      lldap:
+        # The API reaches the mail server inside Docker, under the name its certificate is for
+        aliases:
+          - mail.tebonsma.no
+```
+
+- `ENABLE_OAUTH2` adds docker-mailserver's oauth2 passdb next to the LDAP one, with
+  `username_attribute = email` and the `oauthbearer xoauth2` mechanisms. The API and the mail
+  server must share the network the alias is on. Restart with `docker compose up -d`; mail is
+  away for under a minute.
+- Check it afterwards: the IMAP capabilities on 993 and the SMTP `EHLO` answer on 465 list
+  `XOAUTH2` and `OAUTHBEARER`, a made-up token is refused, and password logins keep appearing in
+  the mail log (`imap-login: Login: user=<…>, method=PLAIN`).
+- Authelia answers 401 without a body for a bad token, which Dovecot 2.3 reports as
+  `NO [UNAVAILABLE] Temporary authentication failure` instead of as wrong credentials. The login
+  is refused either way, but the API can't tell it from a mail server that is down, so a login
+  that has run out shows as a server error on the mail page until the member logs in again.
+  Pointing Dovecot at Authelia's token introspection endpoint instead would need a confidential
+  client of its own and `active_attribute = active` in `dovecot-oauth2.conf.ext`.
+
 ## Requirements
 
 - Node.js 22.18 or newer, which runs the TypeScript sources directly (no build step), or Docker.
