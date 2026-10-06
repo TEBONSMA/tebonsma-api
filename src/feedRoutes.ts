@@ -37,7 +37,7 @@ import {
 } from './feed.ts'
 import { markMailNotificationsRead } from './mail/notifications.ts'
 import { pollMail } from './mail/poll.ts'
-import { getAvatar } from './members.ts'
+import { getAvatar, usernameOf } from './members.ts'
 
 export const MAX_POST_LENGTH = 5000
 const MAX_COMMENT_LENGTH = 2000
@@ -46,6 +46,7 @@ const MAX_POLL_OPTIONS = 6
 const MAX_POLL_OPTION_LENGTH = 80
 const MAX_EVENT_TITLE_LENGTH = 120
 const MAX_EVENT_LOCATION_LENGTH = 200
+const MAX_ORGANIZERS = 20
 const PAGE_SIZE = 10
 const NOTIFICATIONS_SHOWN = 30
 const MAX_PAGE_SIZE = 30
@@ -90,10 +91,21 @@ function readTime(raw: unknown) {
   return time.toISOString()
 }
 
+// Members are named by their public id
+function readOrganizers(raw: unknown) {
+  if (!Array.isArray(raw) || raw.some(id => typeof id !== 'string')) throw bad('Ugyldige arrangører')
+  if (raw.length > MAX_ORGANIZERS) throw bad(`Et arrangement kan ha opptil ${MAX_ORGANIZERS} arrangører`)
+  return [...new Set(raw as string[])].map(id => {
+    const username = usernameOf(id)
+    if (!username) throw bad('En av arrangørene finnes ikke')
+    return username
+  })
+}
+
 function readEvent(raw: unknown): EventInput | null {
   if (raw === undefined || raw === null) return null
   if (typeof raw !== 'object' || Array.isArray(raw)) throw bad('Ugyldig arrangement')
-  const { title, location, startsAt = null, endsAt = null, betting } = raw as Record<string, unknown>
+  const { title, location, startsAt = null, endsAt = null, betting, organizers } = raw as Record<string, unknown>
   if (betting !== undefined && typeof betting !== 'boolean') throw bad('Ugyldig arrangement')
 
   const event: EventInput = {
@@ -103,6 +115,7 @@ function readEvent(raw: unknown): EventInput | null {
     startsAt: startsAt === null ? null : readTime(startsAt),
     endsAt: endsAt === null ? null : readTime(endsAt),
     betting,
+    organizers: organizers === undefined ? undefined : readOrganizers(organizers),
   }
   if (!event.title) throw bad('Arrangementet trenger en tittel')
   if ((event.startsAt === null) !== (event.endsAt === null)) throw bad('Oppgi både start og slutt, eller ingen av dem')

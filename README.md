@@ -40,9 +40,9 @@ a login and then return only public posts; everything else needs a member's toke
 | Method | Path | Does |
 |---|---|---|
 | GET | `/feed/posts?sort=&offset=&limit=` | A page of posts, pinned ones first. `sort` is `new`, `old`, `likes` or `comments` |
-| GET | `/feed/posts/:id` | One post |
+| GET | `/feed/posts/:id` | One post. `canEdit` is true for the author and, on events, `event.organizers` |
 | POST | `/feed/posts` | Write a post: `{ body, visibility, attachmentIds, pollOptions }`. With `event: { title, location, startsAt, endsAt }` the post is an event, and every member is notified. An event's poll also needs `pollQuestion`, since its text describes the event |
-| PATCH | `/feed/posts/:id` | Edit own post: `{ body, visibility, attachmentIds }`, and `event` when it is one |
+| PATCH | `/feed/posts/:id` | Edit own post, or an event you organize: `{ body, visibility, attachmentIds }`, and `event` when it is one. `event.organizers` is a list of member ids to share editing with (only the author can change it) |
 | DELETE | `/feed/posts/:id` | Delete own post (admins: any post) |
 | PUT, DELETE | `/feed/posts/:id/like` | Like or unlike |
 | GET | `/feed/posts/:id/likes` | Who liked it |
@@ -58,13 +58,14 @@ a login and then return only public posts; everything else needs a member's toke
 | GET | `/feed/comments/:id/likes` | Who liked the comment |
 | POST | `/feed/attachments` | Upload a file (multipart field `file`, max 10 MB) to attach to a post or comment |
 | GET | `/feed/attachments/:id` | The file. Needs a login unless its post is public |
+| GET | `/members` | All members, to pick who to share an event with |
 | GET | `/members/:id/avatar` | Profile picture of a feed author |
 | GET | `/notifications` | Own notifications and the number of unread ones |
 | POST | `/notifications/read` | Mark as read: `{ ids }`, or everything without `ids` |
 | GET | `/events?from=&to=` | Events in the order they take place, the ones without a date last. Visitors get the public ones |
 | PUT | `/events/:id/rsvp` | Answer a closed (`members`) event: `{ answer }` is `yes`, `no`, or `null` to take it back |
 | GET | `/events/:id/rsvps` | Who answered what |
-| POST | `/events/:id/announcements` | Message from the organizer to every member: `{ body }` |
+| POST | `/events/:id/announcements` | Message from an organizer (the author or a member they shared the event with) to every member: `{ body }` |
 | POST | `/events/:id/poll` | The organizer adds a poll to an event that has none: `{ question, pollOptions }` |
 | GET | `/calendar.ics` | The public events as an iCalendar feed for calendar apps to subscribe to |
 | GET | `/calendar/:secret.ics` | A member's feed, with the closed events too. No login; the secret in the address is the key |

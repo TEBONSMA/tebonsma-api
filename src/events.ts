@@ -17,6 +17,8 @@ export interface EventInput {
   endsAt: string | null
   // Whether members can bet on it on TebBet. Left out when editing: stays as it was.
   betting?: boolean
+  // Usernames of the members who organize it besides its author. Left out when editing: stays as it was.
+  organizers?: string[]
 }
 
 db.exec(`
@@ -35,6 +37,13 @@ db.exec(`
     username   TEXT NOT NULL,
     answer     TEXT NOT NULL CHECK (answer IN ('yes', 'no')),
     created_at TEXT NOT NULL,
+    PRIMARY KEY (post_id, username)
+  );
+
+  -- Members who may edit an event along with the one who made it (the post's author)
+  CREATE TABLE IF NOT EXISTS event_organizers (
+    post_id  TEXT NOT NULL REFERENCES events (post_id) ON DELETE CASCADE,
+    username TEXT NOT NULL,
     PRIMARY KEY (post_id, username)
   );
 `)
@@ -74,12 +83,27 @@ export function saveEvent(postId: string, input: EventInput) {
       title = excluded.title, location = excluded.location,
       starts_at = excluded.starts_at, ends_at = excluded.ends_at, betting = excluded.betting
   `).run(postId, input.title, input.location, input.startsAt, input.endsAt, betting ? 1 : 0)
+
+  if (input.organizers) {
+    db.prepare('DELETE FROM event_organizers WHERE post_id = ?').run(postId)
+    for (const username of new Set(input.organizers)) {
+      db.prepare('INSERT INTO event_organizers (post_id, username) VALUES (?, ?)').run(postId, username)
+    }
+  }
 }
+
+export const organizersOf = (postId: string) =>
+  (db.prepare('SELECT username FROM event_organizers WHERE post_id = ? ORDER BY rowid').all(postId) as { username: string }[]).map(
+    row => row.username,
+  )
+
+export const isOrganizer = (postId: string, username: string) =>
+  !!db.prepare('SELECT 1 FROM event_organizers WHERE post_id = ? AND username = ?').get(postId, username)
 
 export const isEvent = (postId: string) => !!findEvent(postId)
 
 // Members answer whether they are coming to closed events; public ones have no sign-up
-export function eventOf(postId: string, viewer: Viewer | null, visibility: Visibility) {
+export function eventOf(postId: string, viewer: Viewer | null, visibility: Visibility, organizers: PublicMember[] = []) {
   const row = findEvent(postId)
   if (!row) return null
 
@@ -98,6 +122,7 @@ export function eventOf(postId: string, viewer: Viewer | null, visibility: Visib
     startsAt: row.starts_at,
     endsAt: row.ends_at,
     betting: row.betting === 1,
+    organizers,
     rsvp,
   }
 }
