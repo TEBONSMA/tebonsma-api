@@ -400,6 +400,7 @@ What is pushed, after the change is saved:
 | `teb` | A comment on a post, or a reply to a comment | The same members the bell tells |
 | `teb` | A new event, or an organizer's announcement | Every member with notifications on, but the one who made it |
 | `tebbet` | A slip is decided: won, lost or voided | The member who played it. Not for a roulette miss as the slip is placed, which the member sees at once |
+| `tebbet` | Once an hour, if markets have opened since the last look and are still open: one push per member about them all | Every member with notifications on, leaving out markets they are kept out of or made themselves |
 
 Only addresses at the push services above are accepted, never one inside the network, since
 the API posts to whatever address it is given. A subscription the push service says is gone
@@ -440,6 +441,7 @@ the API posts to whatever address it is given. A subscription the push service s
 | `MAIL_OFFLINE_AUTHORIZE_URL`, `MAIL_OFFLINE_TOKEN_URL`, `MAIL_OFFLINE_REVOKE_URL` | the provider's `/api/oidc/...` endpoints, taken from `OIDC_USERINFO_URL` | Only needed if the provider uses other addresses |
 | `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` | none | The key pair push notifications are signed with. Make one with `npx web-push generate-vapid-keys`, and keep it: browsers subscribed with one key won't take pushes signed with another. Without both, push is off |
 | `VAPID_SUBJECT` | `https://tebonsma.no` | Where the push services can reach whoever runs the API (an `https:` or `mailto:` address) |
+| `NEW_MARKETS_CHECK_SECONDS` | `3600` | How often TebBet's members hear about new markets. The first look after a fresh start of the database only starts the clock |
 
 Put the credentials in `.env` (see `.env.example`). It is git-ignored and should never be
 committed. That goes for `MAIL_OFFLINE_CLIENT_SECRET`, `MAIL_OFFLINE_KEY` and `VAPID_PRIVATE_KEY` too.
