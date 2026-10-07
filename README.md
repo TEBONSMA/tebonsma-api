@@ -64,7 +64,7 @@ a login and then return only public posts; everything else needs a member's toke
 | GET | `/notifications` | Own notifications and the number of unread ones |
 | POST | `/notifications/read` | Mark as read: `{ ids }`, or everything without `ids` |
 | GET | `/events?from=&to=` | Events in the order they take place, the ones without a date last. Visitors get the public ones |
-| PUT | `/events/:id/rsvp` | Answer a closed (`members`) event: `{ answer }` is `yes`, `no`, or `null` to take it back |
+| PUT | `/events/:id/rsvp` | Answer a closed (`members`) event: `{ answer }` is `yes`, `maybe`, `no`, or `null` to take it back |
 | GET | `/events/:id/rsvps` | Who answered what |
 | POST | `/events/:id/announcements` | Message from an organizer (the author or a member they shared the event with) to every member: `{ body }` |
 | POST | `/events/:id/poll` | The organizer adds a poll to an event that has none: `{ question, pollOptions }` |
