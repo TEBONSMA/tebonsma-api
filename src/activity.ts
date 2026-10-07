@@ -1,18 +1,20 @@
 import { hiddenFor, labelOf, resultOf, toOdds, toSlips, type LegResultRow, type SelectionResult, type SlipRow } from './bets.ts'
+import { handsBefore } from './blackjack.ts'
 import { BOT } from './bots/bot.ts'
 import { db } from './db.ts'
 import type { Viewer } from './feed.ts'
+import { spinsBefore } from './flaks.ts'
 import { GAMES } from './flaksGames.ts'
 import { getMembers } from './members.ts'
 
 // Activity: everything that happens on TebBet in one log, the newest first. Every slip played,
-// every market decided or called off, and every scratch card scratched to the end, a page at a
-// time. Everyone sees the same log; who played what is already shown on each event and group,
+// every market decided or called off, every scratch card scratched to the end, every roulette spin
+// and every blackjack hand played out (free ones left out), a page at a time. Everyone sees the same log; who played what is already shown on each event and group,
 // but not the odds on markets the viewer is kept out of.
 
 const PAGE = 50
 
-export const ACTIVITY_KINDS = ['slip', 'result', 'ticket'] as const
+export const ACTIVITY_KINDS = ['slip', 'result', 'ticket', 'spin', 'hand'] as const
 export type ActivityKind = (typeof ACTIVITY_KINDS)[number]
 
 interface ResultRow {
@@ -159,6 +161,9 @@ export async function listActivity(viewer: Viewer, before: string | null, kinds:
         .all(until, PAGE) as unknown as TicketRow[])
     : []
 
+  const spins = kinds.includes('spin') ? spinsBefore(until, PAGE) : []
+  const hands = kinds.includes('hand') ? handsBefore(until, PAGE) : []
+
   const winners = new Map<string, string[]>()
   if (results.length > 0) {
     const rows = db
@@ -174,7 +179,14 @@ export async function listActivity(viewer: Viewer, before: string | null, kinds:
   const players = playersOn(results.map(row => row.id))
   const deciders = results.map(row => row.settled_by).filter((name): name is string => !!name && name !== BOT.username)
   const bettors = [...players.values()].flat().map(picks => picks[0].username)
-  const members = await getMembers([...slips.map(row => row.username), ...tickets.map(row => row.username), ...deciders, ...bettors])
+  const members = await getMembers([
+    ...slips.map(row => row.username),
+    ...tickets.map(row => row.username),
+    ...spins.map(row => row.username),
+    ...hands.map(row => row.username),
+    ...deciders,
+    ...bettors,
+  ])
   const slipsById = new Map(toSlips(slips, hidden).map(slip => [slip.id, slip]))
 
   const items = [
@@ -216,10 +228,24 @@ export async function listActivity(viewer: Viewer, before: string | null, kinds:
       price: row.price,
       prize: row.prize,
     })),
+    ...spins.map(({ username, spin }) => ({
+      kind: 'spin' as const,
+      id: `spin:${spin.id}`,
+      at: spin.createdAt,
+      member: members.get(username)!,
+      spin,
+    })),
+    ...hands.map(({ username, hand }) => ({
+      kind: 'hand' as const,
+      id: `hand:${hand.id}`,
+      at: hand.doneAt ?? hand.createdAt,
+      member: members.get(username)!,
+      hand,
+    })),
   ].sort((a, b) => b.at.localeCompare(a.at))
 
   const page = items.slice(0, PAGE)
-  const more = items.length > PAGE || [slips, results, tickets].some(rows => rows.length === PAGE)
+  const more = items.length > PAGE || [slips, results, tickets, spins, hands].some(rows => rows.length === PAGE)
   // Ask with before = next for the page after this one
   return { items: page, next: more && page.length > 0 ? page[page.length - 1].at : null }
 }

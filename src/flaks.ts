@@ -318,6 +318,12 @@ export function spinRoulette(viewer: Viewer, bets: RouletteBet[]) {
   })
 }
 
+// Everyone's spins before a time, the latest first, for the activity log
+export const spinsBefore = (until: string, limit: number) =>
+  (
+    db.prepare('SELECT * FROM flaks_spins WHERE created_at < ? ORDER BY created_at DESC LIMIT ?').all(until, limit) as unknown as SpinRow[]
+  ).map(row => ({ username: row.username, spin: toSpin(row) }))
+
 // Spins, the latest first: a member's own, or another's by public id
 const spinsOf = (username: string) =>
   (

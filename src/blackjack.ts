@@ -297,6 +297,14 @@ export function act(viewer: Viewer, id: string, action: Action) {
   })
 }
 
+// Everyone's hands played to the end before a time, free ones left out, for the activity log
+export const handsBefore = (until: string, limit: number) =>
+  (
+    db
+      .prepare("SELECT * FROM flaks_hands WHERE status = 'done' AND trial = 0 AND done_at < ? ORDER BY done_at DESC LIMIT ?")
+      .all(until, limit) as unknown as HandRow[]
+  ).map(row => ({ username: row.username, hand: toHand(row) }))
+
 // Hands played to the end, the latest first, free ones left out: a member's own, or another's
 const doneHandsOf = (username: string) =>
   (

@@ -413,14 +413,14 @@ betRoutes.post('/bet/casino/roulette/spin', async c => {
   return c.json({ ...spin, account: await getAccount(viewer) })
 })
 betRoutes.get('/bet/ledger', c => c.json(listLedger(viewerOf(c))))
-// Everything played and decided on TebBet, the newest first: ?before=<next> for older, ?kind=slip,
-// result or ticket for one kind
+// Everything played and decided on TebBet, the newest first: ?before=<next> for older, ?kind= one
+// or more of slip, result, ticket, spin and hand, comma-separated
 betRoutes.get('/bet/activity', async c => {
   const before = c.req.query('before')
   if (before !== undefined && Number.isNaN(Date.parse(before))) throw bad('Ugyldig tidspunkt')
   const kind = c.req.query('kind')
-  if (kind !== undefined && !ACTIVITY_KINDS.includes(kind as ActivityKind)) throw bad('Ugyldig type')
-  const kinds = kind === undefined ? ACTIVITY_KINDS : [kind as ActivityKind]
+  const kinds = kind === undefined ? ACTIVITY_KINDS : (kind.split(',') as ActivityKind[])
+  if (kinds.some(k => !ACTIVITY_KINDS.includes(k))) throw bad('Ugyldig type')
   return c.json(await listActivity(viewerOf(c), before === undefined ? null : new Date(before).toISOString(), kinds))
 })
 betRoutes.get('/bet/leaderboard', async c => c.json(await getLeaderboard()))

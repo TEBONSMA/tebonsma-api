@@ -409,6 +409,16 @@ describe('TebBet', () => {
     assert.equal(played.data.length, 5)
   })
 
+  it('logs roulette spins and blackjack hands, but not free ones', async () => {
+    assert.equal((await call('POST', '/bet/casino/roulette/spin', 'kari', { bets: [{ type: 'black', stake: 10 }] })).status, 200)
+    const log = await call('GET', '/bet/activity?kind=spin,hand', 'ola')
+    assert.equal(log.status, 200)
+    assert.ok(log.data.items.every((item: any) => item.kind === 'spin' || item.kind === 'hand'))
+    assert.equal(log.data.items.filter((item: any) => item.kind === 'spin').length, 1)
+    assert.ok(log.data.items.filter((item: any) => item.kind === 'hand').every((item: any) => !item.hand.trial))
+    assert.equal((await call('GET', '/bet/activity?kind=spin,nope', 'ola')).status, 400)
+  })
+
   it('lets a member try blackjack for free', async () => {
     const before = (await call('GET', '/bet/me', 'ola')).data.balance
     let hand = (await call('POST', '/bet/casino/blackjack/deal', 'ola', { bet: 100, trial: true })).data.hand
