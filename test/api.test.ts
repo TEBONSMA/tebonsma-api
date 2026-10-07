@@ -447,6 +447,48 @@ describe('TebBet', () => {
     assert.equal((await fetch(API + `/tebbet/groups/${group.id}/image`)).status, 404)
   })
 
+  it('plays a combination with a roulette pick, spun at once', async () => {
+    const group = (await call('POST', '/bet/groups', 'admin', { title: 'Rulettkombo' })).data
+    const market = (
+      await call('POST', `/bet/groups/${group.id}/markets`, 'admin', {
+        question: 'Blir det fest?',
+        kind: 'yesno',
+        outcomes: [{ label: 'Ja', odds: 2 }, { label: 'Nei', odds: 2 }],
+        excluded: [],
+      })
+    ).data
+    const red = { roulette: { type: 'red' }, odds: 2 }
+    const yes = async () => {
+      const outcome = (await call('GET', `/bet/groups/${group.id}`, 'kari')).data.markets[0].outcomes[0]
+      return { outcomeId: outcome.id, odds: outcome.odds }
+    }
+    const play = async (selections: unknown[]) => call('POST', '/bet/slips', 'kari', { slips: [{ stake: 10, selections }] })
+    assert.equal((await play([red])).status, 400, 'roulette alone')
+    assert.equal((await play([await yes(), red, red])).status, 400, 'two roulette picks')
+    assert.equal((await play([await yes(), { roulette: { type: 'red' }, odds: 3 }])).status, 400, 'wrong odds')
+
+    const played = []
+    for (let i = 0; i < 6; i++) {
+      const placed = await play([await yes(), red])
+      assert.equal(placed.status, 201, JSON.stringify(placed.data))
+      const [slip] = placed.data.slips
+      const spin = slip.selections.find((s: any) => s.roulette)
+      assert.equal(spin.label, 'Rødt')
+      assert.ok(spin.roulette.landed >= 0 && spin.roulette.landed <= 36)
+      // A miss loses the slip at once; a hit leaves it waiting on the market
+      assert.equal(slip.status, spin.result === 'won' ? 'open' : 'lost')
+      played.push(slip)
+    }
+
+    assert.equal((await call('POST', `/bet/markets/${market.id}/settle`, 'admin', { outcomeId: market.outcomes[0].id })).status, 200)
+    const settled = (await call('GET', '/bet/slips?status=settled', 'kari')).data
+    for (const slip of played.filter(s => s.status === 'open')) {
+      const after = settled.find((s: any) => s.id === slip.id)
+      assert.equal(after.status, 'won')
+      assert.equal(after.payout, Math.floor((10 * Math.round(slip.odds * 100)) / 100), 'the market and roulette odds together')
+    }
+  })
+
   it('lets a member try blackjack for free', async () => {
     const before = (await call('GET', '/bet/me', 'ola')).data.balance
     let hand = (await call('POST', '/bet/casino/blackjack/deal', 'ola', { bet: 100, trial: true })).data.hand

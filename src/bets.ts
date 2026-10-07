@@ -1,7 +1,8 @@
-import { randomUUID } from 'node:crypto'
+import { randomInt, randomUUID } from 'node:crypto'
 import { HTTPException } from 'hono/http-exception'
 import { config } from './config.ts'
 import { db, transaction } from './db.ts'
+import { colorOf, ROULETTE_ODDS, spotLabel, wins, type RouletteSpot } from './roulette.ts'
 import type { Viewer } from './feed.ts'
 import { listGroupMembers } from './lldap.ts'
 import { getMembers, usernameOf } from './members.ts'
@@ -205,6 +206,18 @@ db.exec(`
 
   CREATE TABLE IF NOT EXISTS bet_selections (${SELECTION_COLUMNS});
   ${SELECTION_INDEXES}
+
+  -- A roulette pick in a combination. The wheel is spun when the slip is played, so where the
+  -- ball landed is known from the start: the slip is lost at once, or waits on its markets.
+  CREATE TABLE IF NOT EXISTS bet_roulette_legs (
+    slip_id TEXT PRIMARY KEY REFERENCES bet_slips (id) ON DELETE CASCADE,
+    type    TEXT NOT NULL,
+    number  INTEGER,
+    -- In hundredths, like the other odds
+    odds    INTEGER NOT NULL,
+    landed  INTEGER NOT NULL,
+    won     INTEGER NOT NULL
+  );
 
   CREATE TABLE IF NOT EXISTS bet_ledger (${LEDGER_COLUMNS});
   ${LEDGER_INDEXES}
@@ -699,7 +712,8 @@ async function latestBets(viewer: Viewer, condition: string, ...params: string[]
   const rows = db
     .prepare(
       `SELECT s.slip_id, s.market_id, s.outcome_id, s.side, s.line, s.odds, sl.username, sl.stake, sl.created_at, o.label,
-         (SELECT COUNT(*) FROM bet_selections x WHERE x.slip_id = s.slip_id) AS legs
+         (SELECT COUNT(*) FROM bet_selections x WHERE x.slip_id = s.slip_id)
+           + (SELECT COUNT(*) FROM bet_roulette_legs r WHERE r.slip_id = s.slip_id) AS legs
        FROM bet_selections s
        JOIN bet_slips sl ON sl.id = s.slip_id
        JOIN bet_markets m ON m.id = s.market_id
@@ -1071,6 +1085,11 @@ function settleSlip(slipId: string) {
        WHERE s.slip_id = ?`,
     )
     .all(slipId) as unknown as (LegResultRow & { odds: number })[]
+  // A roulette pick is settled from the start: right or wrong, at its odds
+  const roulette = db.prepare('SELECT odds, won FROM bet_roulette_legs WHERE slip_id = ?').get(slipId) as
+    | { odds: number; won: number }
+    | undefined
+  if (roulette) legs.push({ outcome_id: 'roulette', side: null, line: null, status: 'settled', won: roulette.won, result_value: null, odds: roulette.odds })
   const results = legs.map(resultOf)
 
   let status: 'open' | 'won' | 'lost' | 'void'
@@ -1355,9 +1374,14 @@ export type Pick = { outcomeId: string; side: null; line: null } | { outcomeId: 
 
 export interface SlipInput {
   stake: number
-  // odds is what the member saw on the pick, so a change since then is noticed
-  selections: (({ outcomeId: string } | { marketId: string; side: Side; line: number }) & { odds: number })[]
+  // odds is what the member saw on the pick, so a change since then is noticed. A combination may
+  // also have one place on the roulette table.
+  selections: (({ outcomeId: string } | { marketId: string; side: Side; line: number } | { roulette: RouletteSpot }) & { odds: number })[]
 }
+
+type MarketSelection = Exclude<SlipInput['selections'][number], { roulette: RouletteSpot }>
+const isRoulette = (selection: SlipInput['selections'][number]): selection is { roulette: RouletteSpot; odds: number } =>
+  'roulette' in selection
 
 interface Target {
   market_id: string
@@ -1371,7 +1395,7 @@ const priceOf = (marketId: string, pick: Pick) => {
   return { market, price: chanceOf(outcomes, pricesOf(market, outcomes), pick) }
 }
 
-function targetOf(selection: SlipInput['selections'][number]): Target {
+function targetOf(selection: MarketSelection): Target {
   if ('outcomeId' in selection) {
     const row = db.prepare('SELECT market_id FROM bet_outcomes WHERE id = ?').get(selection.outcomeId) as
       | { market_id: string }
@@ -1397,7 +1421,13 @@ export function placeSlips(viewer: Viewer, slips: SlipInput[]) {
     if (total > balanceOf(viewer.username)) throw bad('Du har ikke nok TEB-mynter')
 
     const targets = slips.map(slip => {
-      const legs = slip.selections.map(selection => {
+      const spins = slip.selections.filter(isRoulette)
+      const picks = slip.selections.filter((selection): selection is MarketSelection => !isRoulette(selection))
+      if (spins.length > 1) throw bad('En kupong kan ha bare ett rulettspill')
+      if (spins.length === 1 && picks.length === 0) throw bad('Rulett kan bare spilles i kombinasjon med et odds-spill')
+      const roulette = spins[0]?.roulette ?? null
+      if (roulette && Math.round(spins[0].odds * 100) !== ROULETTE_ODDS[roulette.type] * 100) throw bad('Ugyldig odds på rulett')
+      const legs = picks.map(selection => {
         const target = targetOf(selection)
         const { market, price } = priceOf(target.market_id, target.pick)
         if (stateOf(market) !== 'open') throw bad(`«${market.question}» er stengt for spill`)
@@ -1411,14 +1441,14 @@ export function placeSlips(viewer: Viewer, slips: SlipInput[]) {
       if (new Set(legs.map(leg => leg.key)).size !== legs.length) {
         throw bad('En kombinasjon kan bare ha ett utfall fra hvert spill')
       }
-      return legs.map(leg => leg.target)
+      return { legs: legs.map(leg => leg.target), roulette }
     })
 
     // Each stake moves the odds for the ones after it, so they are worked out one by one
     const time = now()
     return slips.map((slip, i) => {
       const id = randomUUID()
-      const legs = targets[i].map(target => {
+      const legs = targets[i].legs.map(target => {
         const { market, price } = priceOf(target.market_id, target.pick)
         return {
           ...target,
@@ -1426,7 +1456,9 @@ export function placeSlips(viewer: Viewer, slips: SlipInput[]) {
           shares: sharesFor(slip.stake, price, market.liquidity),
         }
       })
-      const odds = combine(legs.map(leg => leg.odds))
+      const { roulette } = targets[i]
+      const rouletteOdds = roulette ? ROULETTE_ODDS[roulette.type] * 100 : null
+      const odds = combine([...legs.map(leg => leg.odds), ...(rouletteOdds ? [rouletteOdds] : [])])
       db.prepare('INSERT INTO bet_slips (id, username, stake, odds, created_at) VALUES (?, ?, ?, ?, ?)').run(
         id,
         viewer.username,
@@ -1446,6 +1478,19 @@ export function placeSlips(viewer: Viewer, slips: SlipInput[]) {
         id,
         time,
       )
+      if (roulette) {
+        // The wheel goes now: a miss loses the slip at once
+        const landed = randomInt(37)
+        db.prepare('INSERT INTO bet_roulette_legs (slip_id, type, number, odds, landed, won) VALUES (?, ?, ?, ?, ?, ?)').run(
+          id,
+          roulette.type,
+          roulette.number ?? null,
+          rouletteOdds,
+          landed,
+          wins(roulette, landed) ? 1 : 0,
+        )
+        settleSlip(id)
+      }
       return id
     })
   })
@@ -1496,10 +1541,32 @@ function legsOf(slipIds: string[]) {
 
 // hidden: markets whose odds the viewer may not see (hiddenFor); a slip with a leg on one shows
 // neither that leg's odds nor its own
+interface RouletteLegRow {
+  slip_id: string
+  type: RouletteSpot['type']
+  number: number | null
+  odds: number
+  landed: number
+  won: number
+}
+
+// The roulette picks on the slips, by slip
+function rouletteLegsOf(slipIds: string[]) {
+  if (slipIds.length === 0) return new Map<string, RouletteLegRow>()
+  const rows = db
+    .prepare(`SELECT * FROM bet_roulette_legs WHERE slip_id IN (${slipIds.map(() => '?').join(', ')})`)
+    .all(...slipIds) as unknown as RouletteLegRow[]
+  return new Map(rows.map(row => [row.slip_id, row]))
+}
+
+const rouletteLabel = (leg: RouletteLegRow) => spotLabel({ type: leg.type, number: leg.number ?? undefined })
+
 export function toSlips(rows: SlipRow[], hidden: Set<string> = new Set()) {
   const legs = legsOf(rows.map(row => row.id))
+  const spins = rouletteLegsOf(rows.map(row => row.id))
   return rows.map(row => {
     const ours = legs.filter(leg => leg.slip_id === row.id)
+    const spin = spins.get(row.id)
     const secret = ours.some(leg => hidden.has(leg.market_id))
     return {
       id: row.id,
@@ -1510,8 +1577,9 @@ export function toSlips(rows: SlipRow[], hidden: Set<string> = new Set()) {
       payout: row.payout,
       createdAt: row.created_at,
       settledAt: row.settled_at,
-      selections: ours.map(leg => ({
-        marketId: leg.market_id,
+      selections: [
+        ...ours.map(leg => ({
+        marketId: leg.market_id as string | null,
         eventId: leg.event_id,
         // Missing for markets that aren't about an event, or when the event has been deleted
         eventTitle: leg.event_title,
@@ -1523,7 +1591,28 @@ export function toSlips(rows: SlipRow[], hidden: Set<string> = new Set()) {
         label: labelOf(leg),
         odds: hidden.has(leg.market_id) ? null : toOdds(leg.odds),
         result: resultOf(leg),
+        // Set on a roulette pick: where the ball landed
+        roulette: null as { landed: number; color: 'red' | 'black' | 'green' } | null,
       })),
+        // The roulette pick, with where the ball landed, after the markets
+        ...(spin
+          ? [
+              {
+                marketId: null,
+                eventId: null,
+                eventTitle: null,
+                groupId: null,
+                groupTitle: null,
+                question: 'Rulett',
+                outcomeId: null,
+                label: rouletteLabel(spin),
+                odds: toOdds(spin.odds) as number | null,
+                result: (spin.won ? 'won' : 'lost') as SelectionResult,
+                roulette: { landed: spin.landed, color: colorOf(spin.landed) },
+              },
+            ]
+          : []),
+      ],
     }
   })
 }
@@ -1570,7 +1659,9 @@ export function listLedger(viewer: Viewer) {
     detail: string | null
     created_at: string
   }[]
-  const legs = legsOf([...new Set(rows.flatMap(row => (row.slip_id ? [row.slip_id] : [])))])
+  const slipIds = [...new Set(rows.flatMap(row => (row.slip_id ? [row.slip_id] : [])))]
+  const legs = legsOf(slipIds)
+  const spins = rouletteLegsOf(slipIds)
 
   let balance = balanceOf(viewer.username)
   return rows.map(row => {
@@ -1584,9 +1675,12 @@ export function listLedger(viewer: Viewer) {
       slip: row.slip_id
         ? {
             id: row.slip_id,
-            selections: legs
-              .filter(leg => leg.slip_id === row.slip_id)
-              .map(leg => ({ question: leg.question, label: labelOf(leg), eventTitle: leg.event_title ?? leg.group_title })),
+            selections: [
+              ...legs
+                .filter(leg => leg.slip_id === row.slip_id)
+                .map(leg => ({ question: leg.question, label: labelOf(leg), eventTitle: leg.event_title ?? leg.group_title })),
+              ...(spins.has(row.slip_id) ? [{ question: 'Rulett', label: rouletteLabel(spins.get(row.slip_id)!), eventTitle: null }] : []),
+            ],
           }
         : null,
       // A game of luck instead of a slip

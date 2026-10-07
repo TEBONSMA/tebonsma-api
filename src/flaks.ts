@@ -4,6 +4,7 @@ import { addCasinoRow, balanceOf } from './bets.ts'
 import { db, transaction } from './db.ts'
 import type { Viewer } from './feed.ts'
 import { GAMES, type Field, type ScratchGame } from './flaksGames.ts'
+import { colorOf, ROULETTE_ODDS, wins, type RouletteBet } from './roulette.ts'
 import { usernameOf } from './members.ts'
 
 // Flaks: games of pure luck that settle at once, scratch cards and roulette. Coins move through
@@ -208,54 +209,8 @@ export function scratch(viewer: Viewer, id: string, field?: number) {
   })
 }
 
-// --- Roulette: a European wheel with one zero. Bets pay their odds with the stake included.
+// --- Roulette, with the rules in roulette.ts
 
-export type RouletteBetType = 'straight' | 'red' | 'black' | 'odd' | 'even' | 'low' | 'high' | 'dozen' | 'column'
-export interface RouletteBet {
-  type: RouletteBetType
-  // straight 0-36, dozen and column 1-3
-  number?: number
-  stake: number
-}
-
-const RED = new Set([1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36])
-const ROULETTE_ODDS: Record<RouletteBetType, number> = {
-  straight: 36,
-  red: 2,
-  black: 2,
-  odd: 2,
-  even: 2,
-  low: 2,
-  high: 2,
-  dozen: 3,
-  column: 3,
-}
-export const ROULETTE_TYPES = Object.keys(ROULETTE_ODDS) as RouletteBetType[]
-
-function wins(bet: RouletteBet, n: number) {
-  if (bet.type === 'straight') return n === bet.number
-  if (n === 0) return false
-  switch (bet.type) {
-    case 'red':
-      return RED.has(n)
-    case 'black':
-      return !RED.has(n)
-    case 'odd':
-      return n % 2 === 1
-    case 'even':
-      return n % 2 === 0
-    case 'low':
-      return n <= 18
-    case 'high':
-      return n >= 19
-    case 'dozen':
-      return Math.ceil(n / 12) === bet.number
-    case 'column':
-      return ((n - 1) % 3) + 1 === bet.number
-  }
-}
-
-const colorOf = (n: number) => (n === 0 ? ('green' as const) : RED.has(n) ? ('red' as const) : ('black' as const))
 
 interface SpinRow {
   id: string

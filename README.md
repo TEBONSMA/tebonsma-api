@@ -138,7 +138,7 @@ can get a new closing time.
 | POST | `/bet/markets/:id/void` | Call it off and pay the stakes back |
 | POST | `/bet/markets/:id/reopen` | Take the decision back |
 | DELETE | `/bet/markets/:id` | Remove a market nobody has played on |
-| POST | `/bet/slips` | Play: `{ slips: [{ stake, selections }] }`, all or none. A selection is `{ outcomeId, odds }`, or `{ marketId, side, line, odds }` for over/under |
+| POST | `/bet/slips` | Play: `{ slips: [{ stake, selections }] }`, all or none. A selection is `{ outcomeId, odds }`, or `{ marketId, side, line, odds }` for over/under. A combination may also hold one place on the roulette table, `{ roulette: { type, number? }, odds }`: the wheel is spun as the slip is played, and a miss loses the slip at once |
 | GET | `/bet/slips?status=open\|settled` | Own slips |
 | GET | `/bet/ledger` | Own account statement |
 | GET | `/bet/activity` | Everything played and decided on TebBet, the newest first: every slip, every market decided or called off (with everyone who played on it: their pick, odds, whether it came true and what their slip won or lost), every scratch card scratched to the end, every roulette spin and every blackjack hand played out (free ones left out). `?kind=` one or more of `slip`, `result`, `ticket`, `spin` and `hand`, comma-separated; `?before=` the `next` of the previous page for older |

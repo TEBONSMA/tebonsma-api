@@ -72,7 +72,8 @@ function playersOn(marketIds: string[]) {
     .prepare(
       `SELECT s.market_id, s.slip_id, s.outcome_id, s.side, s.line, s.odds, o.label, o.won, m.status, m.result_value,
          sl.username, sl.stake, sl.status AS slip_status, sl.payout, sl.odds AS slip_odds,
-         (SELECT COUNT(*) FROM bet_selections x WHERE x.slip_id = s.slip_id) AS legs,
+         (SELECT COUNT(*) FROM bet_selections x WHERE x.slip_id = s.slip_id)
+           + (SELECT COUNT(*) FROM bet_roulette_legs r WHERE r.slip_id = s.slip_id) AS legs,
          (SELECT COUNT(*) FROM bet_selections x JOIN bet_markets xm ON xm.id = x.market_id
           WHERE x.slip_id = s.slip_id AND xm.status = 'void') AS voided
        FROM bet_selections s
