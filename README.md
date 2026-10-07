@@ -150,6 +150,10 @@ can get a new closing time.
 | POST | `/bet/casino/roulette/spin` | Roulette: `{ bets: [{ type, number?, stake }] }`, settled at once |
 | GET | `/bet/flaks/spins` | Own roulette spins |
 | POST | `/bet/casino/roulette/try` | A free spin with the same bets as `/spin`; nothing is kept, taken or paid |
+| GET | `/bet/casino/blackjack` | The blackjack hand being played, if any (`{ hand }`) |
+| POST | `/bet/casino/blackjack/deal` | Deal a hand: `{ bet, trial? }`. A free one (`trial: true`) takes and pays nothing |
+| POST | `/bet/casino/blackjack/:id/:action` | `hit`, `stand`, `double` or `split` the hand being played |
+| GET | `/bet/flaks/hands` | Own blackjack hands played to the end |
 
 `kind` is `yesno`, `choice`, `multi` or `overunder`. A multi market also takes `winners`,
 about how many of its outcomes will come true (at least 1, fewer than the outcomes, like
@@ -204,6 +208,12 @@ cards follow Norsk Tipping's Flax cards of the same price (prices, top prizes an
 how often a ticket wins) and pay back 55-59 % of the stakes. Coins move through the ledger as
 `casino-stake` and `casino-payout`, with the game and what happened. Finished tickets and
 roulette spins are kept, so they show among the settled bets.
+
+Blackjack (`src/blackjack.ts`) is played against the dealer, one hand at a time, from an endlessly
+shuffled shoe kept on the server, so the hole card can't be peeked at. Blackjack pays 3:2 (rounded
+down), the dealer peeks for blackjack and stands on soft 17, any first two cards can be doubled,
+and a pair can be split once (split aces get one card each). With good play it pays back about
+99,5 % of the stakes.
 
 ### Game scoreboards
 

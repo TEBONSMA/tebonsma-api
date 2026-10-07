@@ -388,6 +388,36 @@ describe('TebBet', () => {
     assert.equal((await call('POST', '/bet/flaks/finnes-ikke/try', 'ola')).status, 404)
   })
 
+  it('plays blackjack, with coins in and out of the ledger', async () => {
+    const balance = async () => (await call('GET', '/bet/me', 'kari')).data.balance
+    for (let round = 0; round < 5; round++) {
+      const before = await balance()
+      const dealt = await call('POST', '/bet/casino/blackjack/deal', 'kari', { bet: 20 })
+      assert.equal(dealt.status, 201, JSON.stringify(dealt.data))
+      let hand = dealt.data.hand
+      if (hand.status === 'playing') {
+        assert.equal(hand.dealer.cards[1], null, 'the hole card stays hidden')
+        assert.equal((await call('POST', '/bet/casino/blackjack/deal', 'kari', { bet: 20 })).status, 409, 'one hand at a time')
+        assert.equal((await call('POST', `/bet/casino/blackjack/${hand.id}/fly`, 'kari')).status, 400)
+        hand = (await call('POST', `/bet/casino/blackjack/${hand.id}/stand`, 'kari')).data.hand
+      }
+      assert.equal(hand.status, 'done')
+      assert.ok(hand.dealer.cards.every((card: any) => card !== null), 'the hole card is shown at the end')
+      assert.equal(await balance(), before - hand.staked + hand.payout)
+    }
+    const played = await call('GET', '/bet/flaks/hands', 'kari')
+    assert.equal(played.data.length, 5)
+  })
+
+  it('lets a member try blackjack for free', async () => {
+    const before = (await call('GET', '/bet/me', 'ola')).data.balance
+    let hand = (await call('POST', '/bet/casino/blackjack/deal', 'ola', { bet: 100, trial: true })).data.hand
+    assert.equal(hand.trial, true)
+    while (hand.status === 'playing') hand = (await call('POST', `/bet/casino/blackjack/${hand.id}/hit`, 'ola')).data.hand
+    assert.equal((await call('GET', '/bet/me', 'ola')).data.balance, before, 'no coins move')
+    assert.equal((await call('GET', '/bet/flaks/hands', 'ola')).data.length, 0, 'free hands are not listed')
+  })
+
   it('lets a member try roulette for free', async () => {
     const before = (await call('GET', '/bet/me', 'ola')).data.balance
     const spin = await call('POST', '/bet/casino/roulette/try', 'ola', { bets: [{ type: 'red', stake: 100 }, { type: 'straight', number: 17, stake: 10 }] })

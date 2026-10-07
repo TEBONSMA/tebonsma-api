@@ -3,6 +3,7 @@ import { bodyLimit } from 'hono/body-limit'
 import { HTTPException } from 'hono/http-exception'
 import { ACTIVITY_KINDS, listActivity, type ActivityKind } from './activity.ts'
 import { requireCaller, type Env } from './auth.ts'
+import { ACTIONS, act, deal, doneHands, doneHandsOfMember, openHand, type Action } from './blackjack.ts'
 import {
   closeMarket,
   createGroup,
@@ -387,8 +388,23 @@ betRoutes.post('/bet/flaks/tickets/:id/scratch', async c => {
   const ticket = scratch(viewer, id(c), field as number | undefined)
   return c.json({ ticket, account: await getAccount(viewer) })
 })
-// Own roulette spins
+// Own roulette spins, and blackjack hands played to the end
 betRoutes.get('/bet/flaks/spins', c => c.json(spins(viewerOf(c))))
+betRoutes.get('/bet/flaks/hands', c => c.json(doneHands(viewerOf(c))))
+// Blackjack: the hand being played, if any; a new one ({ bet, trial? }); and the moves on it
+betRoutes.get('/bet/casino/blackjack', c => c.json({ hand: openHand(viewerOf(c)) }))
+betRoutes.post('/bet/casino/blackjack/deal', async c => {
+  const viewer = viewerOf(c)
+  const { bet, trial } = await readBody(c)
+  if (typeof bet !== 'number' || !Number.isInteger(bet) || bet < 1 || bet > MAX_STAKE) throw bad('Innsatsen må være et helt antall mynter')
+  return c.json({ hand: deal(viewer, bet, trial === true), account: await getAccount(viewer) }, 201)
+})
+betRoutes.post('/bet/casino/blackjack/:id/:action', async c => {
+  const action = c.req.param('action') ?? ''
+  if (!ACTIONS.includes(action as Action)) throw bad('Ugyldig trekk')
+  const viewer = viewerOf(c)
+  return c.json({ hand: act(viewer, id(c), action as Action), account: await getAccount(viewer) })
+})
 // A free spin with the same bets; no coins move and nothing is kept
 betRoutes.post('/bet/casino/roulette/try', async c => c.json(tryRoulette(readRouletteBets(await readBody(c)))))
 betRoutes.post('/bet/casino/roulette/spin', async c => {
@@ -417,5 +433,6 @@ betRoutes.get('/bet/members/:id', async c => {
     ...page,
     tickets: settled ? doneTicketsOfMember(id(c)) : [],
     spins: settled ? spinsOfMember(id(c)) : [],
+    hands: settled ? doneHandsOfMember(id(c)) : [],
   })
 })
