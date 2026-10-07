@@ -68,6 +68,7 @@ before(async () => {
       ALLOWED_ORIGINS: ORIGIN,
       SITE_URL: ORIGIN,
       BOTS: 'off',
+      NEW_MARKETS_CHECK_SECONDS: '1',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
@@ -541,6 +542,7 @@ describe('push notifications', () => {
     assert.equal((await add('dev', { site: 'teb', subscription: subscription('dev-teb') })).status, 204)
     assert.equal((await add('dev', { site: 'tebbet', subscription: subscription('dev-bet') })).status, 204)
     assert.equal((await add('kari', { site: 'teb', subscription: subscription('kari-teb') })).status, 204)
+    assert.equal((await add('kari', { site: 'tebbet', subscription: subscription('kari-bet') })).status, 204)
   })
 
   it('tells the author about a comment, and everyone else about a new event', async () => {
@@ -577,13 +579,49 @@ describe('push notifications', () => {
     const yes = market.data.outcomes[0]
     const played = await call('POST', '/bet/slips', 'dev', { slips: [{ stake: 100, selections: [{ outcomeId: yes.id, odds: yes.odds }] }] })
     assert.equal(played.status, 201, JSON.stringify(played.data))
-    assert.equal(pushedTo('dev-bet').length, 0, 'nothing while it is open')
+    const decided = () => pushedTo('dev-bet').filter(push => push.tag?.startsWith('slip:'))
+    assert.equal(decided().length, 0, 'nothing while it is open')
 
     await call('POST', `/bet/markets/${market.data.id}/settle`, 'admin', { outcomeId: yes.id })
-    const [won] = await until(async () => pushedTo('dev-bet'), list => list.length > 0, 5)
+    const [won] = await until(async () => decided(), list => list.length > 0, 5)
     assert.match(won.title, /^Du vant \d+ T$/)
     assert.equal(won.body, 'Ja · Kommer varselet?')
     assert.equal(won.url, '/mine-spill?vis=avgjorte')
+  })
+
+  it('tells TebBet members about new markets once in a while, but not ones they are kept out of', async () => {
+    const news = (name: string) => pushedTo(name).filter(push => push.tag === 'new-markets')
+    const before = { dev: news('dev-bet').length, kari: news('kari-bet').length }
+    const members = await call('GET', '/bet/members', 'admin')
+    const kari = members.data.find((m: any) => m.name === 'Kari Nordmann')
+    const group = await call('POST', '/bet/groups', 'admin', { title: 'Fredagsquiz' })
+    const add = (question: string, excluded: string[]) =>
+      call('POST', `/bet/groups/${group.data.id}/markets`, 'admin', {
+        question,
+        kind: 'yesno',
+        outcomes: [{ label: 'Ja', odds: 2 }, { label: 'Nei', odds: 2 }],
+        excluded,
+      })
+    assert.equal((await add('Vinner Kari quizen?', [kari.id])).status, 201)
+    assert.equal((await add('Blir det over 30 spørsmål?', [])).status, 201)
+
+    // The check runs every second here (NEW_MARKETS_CHECK_SECONDS), every hour in production,
+    // so the two markets may come in one push or two
+    const mentioning = (list: typeof pushes, text: string) => list.filter(push => push.body.includes(text)).length
+    const forDev = () => news('dev-bet').slice(before.dev)
+    await until(async () => forDev(), list => mentioning(list, 'Vinner Kari') > 0 && mentioning(list, 'over 30') > 0, 5)
+    for (const push of forDev()) {
+      assert.match(push.title, /^(Nytt spill|2 nye spill): Fredagsquiz$/)
+      assert.equal(push.url, `/gruppe/${group.data.id}`)
+    }
+    const [forKari] = await until(async () => news('kari-bet').slice(before.kari), list => list.length > 0, 5)
+    assert.equal(forKari.title, 'Nytt spill: Fredagsquiz')
+    assert.equal(forKari.body, 'Blir det over 30 spørsmål?', 'not the market Kari is kept out of')
+
+    await sleep(1500)
+    assert.equal(mentioning(forDev(), 'Vinner Kari'), 1, 'each market is news once')
+    assert.equal(mentioning(forDev(), 'over 30'), 1)
+    assert.equal(mentioning(news('kari-bet').slice(before.kari), 'Vinner Kari'), 0)
   })
 
   it('stops when the member turns it off', async () => {
