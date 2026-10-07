@@ -5,6 +5,7 @@ import { cors } from 'hono/cors'
 import { HTTPException } from 'hono/http-exception'
 import { requireCaller, type Env } from './auth.ts'
 import { betRoutes } from './betRoutes.ts'
+import { removeUnplayedMarkets } from './bets.ts'
 import { startBots } from './bots/index.ts'
 import { config } from './config.ts'
 import { eventRoutes } from './eventRoutes.ts'
@@ -162,3 +163,17 @@ serve({ fetch: app.fetch, port: config.port }, info => {
 })
 
 if (!trial) startBots()
+
+// Markets nobody played on are cleared away a day after they close
+function clearUnplayed() {
+  try {
+    const removed = removeUnplayedMarkets()
+    if (removed > 0) console.log(`removed ${removed} unplayed ${removed === 1 ? 'market' : 'markets'}`)
+  } catch (err) {
+    console.error('could not remove unplayed markets:', err)
+  }
+}
+if (!trial) {
+  clearUnplayed()
+  setInterval(clearUnplayed, 10 * 60 * 1000)
+}
