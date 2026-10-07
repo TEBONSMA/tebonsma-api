@@ -21,25 +21,27 @@ import {
   getMemberPage,
   getSlips,
   inGroup,
+  type LayoutGroup,
   listEvents,
   listGroups,
   listLedger,
   listMembers,
   listSlips,
+  type MarketInput,
   onEvent,
   placeSlips,
+  readGroupImage,
   renameGroup,
   renameSection,
   reopenMarket,
   saveFront,
   saveLayout,
   sectionNamed,
+  setGroupImage,
   settleMarket,
+  type SlipInput,
   updateMarket,
   voidMarket,
-  type LayoutGroup,
-  type MarketInput,
-  type SlipInput,
 } from './bets.ts'
 import {
   buyTicket,
@@ -80,6 +82,28 @@ const MAX_HIGHEST = 100_000
 export const betRoutes = new Hono<Env>()
 
 betRoutes.use('/bet/*', requireCaller, bodyLimit({ maxSize: 32 * 1024 }))
+
+// A group's picture: anyone may fetch it, like a profile picture, and the ?v= in its address
+// changes with it. Admins put it up as JPEG (the site makes it smaller first) or take it down.
+const MAX_GROUP_IMAGE_BYTES = 1024 * 1024
+betRoutes.get('/tebbet/groups/:id/image', c => {
+  const image = readGroupImage(c.req.param('id'))
+  if (!image) throw new HTTPException(404, { message: 'Gruppen har ikke bilde' })
+  return c.body(Buffer.from(image), 200, {
+    'Content-Type': 'image/jpeg',
+    'X-Content-Type-Options': 'nosniff',
+    'Cache-Control': 'public, max-age=31536000, immutable',
+  })
+})
+betRoutes.put('/tebbet/groups/:id/image', requireCaller, bodyLimit({ maxSize: 2 * 1024 * 1024 }), async c => {
+  const { image } = await readBody(c)
+  if (typeof image !== 'string') throw bad('Mangler bilde')
+  const bytes = Buffer.from(image, 'base64')
+  if (!(bytes.length > 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff)) throw bad('Bildet må være JPEG')
+  if (bytes.length > MAX_GROUP_IMAGE_BYTES) throw new HTTPException(413, { message: 'Bildet er for stort' })
+  return c.json({ image: setGroupImage(viewerOf(c), c.req.param('id'), bytes) })
+})
+betRoutes.delete('/tebbet/groups/:id/image', requireCaller, c => c.json({ image: setGroupImage(viewerOf(c), c.req.param('id'), null) }))
 // Opens the account on the first visit and pays the Mondays owed since the last one
 betRoutes.use('/bet/*', async (c, next) => {
   ensureAccount(c.get('caller').username)

@@ -429,6 +429,24 @@ describe('TebBet', () => {
     assert.deepEqual(logged.fields, scratched.data.ticket.fields)
   })
 
+  it('lets admins put up a picture for a group', async () => {
+    const group = (await call('POST', '/bet/groups', 'admin', { title: 'Med bilde' })).data
+    assert.equal(group.image, null)
+    // The start of a JPEG is all the API checks
+    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 4]).toString('base64')
+    assert.equal((await call('PUT', `/tebbet/groups/${group.id}/image`, 'ola', { image: jpeg })).status, 403)
+    assert.equal((await call('PUT', `/tebbet/groups/${group.id}/image`, 'admin', { image: Buffer.from('not a jpeg').toString('base64') })).status, 400)
+    const put = await call('PUT', `/tebbet/groups/${group.id}/image`, 'admin', { image: jpeg })
+    assert.equal(put.status, 200, JSON.stringify(put.data))
+    const listed = (await call('GET', `/bet/groups/${group.id}`, 'ola')).data
+    assert.equal(listed.image, put.data.image)
+    const picture = await fetch(API + put.data.image)
+    assert.equal(picture.status, 200, 'anyone may fetch it')
+    assert.equal(picture.headers.get('content-type'), 'image/jpeg')
+    assert.equal((await call('DELETE', `/tebbet/groups/${group.id}/image`, 'admin')).data.image, null)
+    assert.equal((await fetch(API + `/tebbet/groups/${group.id}/image`)).status, 404)
+  })
+
   it('lets a member try blackjack for free', async () => {
     const before = (await call('GET', '/bet/me', 'ola')).data.balance
     let hand = (await call('POST', '/bet/casino/blackjack/deal', 'ola', { bet: 100, trial: true })).data.hand

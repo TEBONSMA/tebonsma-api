@@ -122,6 +122,8 @@ can get a new closing time.
 | GET | `/bet/groups` | Every group with its markets, and `front`: where admins have put events and groups on the front page (`event:<id>`, `group:<id>`) |
 | GET | `/bet/groups/:id` | One group, its markets and the latest bets (`/bet/other` is "Andre spill", for the site before groups) |
 | POST, PATCH, DELETE | `/bet/groups`, `/bet/groups/:id` | Make a group (`{ title }`, its id comes from the title), rename it, or delete one that has never had markets and no bot fills (admins) |
+| GET | `/tebbet/groups/:id/image` | A group's picture for its tile, open to anyone like a profile picture; its address in `image` carries a `?v=` that changes with it |
+| PUT, DELETE | `/tebbet/groups/:id/image` | Put up a picture for a group (`{ image }`, base64 JPEG up to 1 MB) or take it down (admins) |
 | PUT | `/bet/front` | The order of the front page from the top: `{ items: ['group:landslaget', 'event:<id>', …] }`. Events left out go by date among the other events, groups at the end |
 | GET | `/bet/members` | The members (`MEMBER_GROUP`), to keep out of a market or add as its outcomes |
 | POST | `/bet/events/:id/markets` | Open a market: `{ question, kind, outcomes: [{ label, odds }], closesAt, excluded }` |

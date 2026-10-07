@@ -139,6 +139,13 @@ db.exec(`
     created_at TEXT NOT NULL
   );
 
+  -- A picture for a group's tile on the front page, as JPEG, which admins put up
+  CREATE TABLE IF NOT EXISTS bet_group_images (
+    group_id   TEXT PRIMARY KEY REFERENCES bet_groups (id) ON DELETE CASCADE,
+    data       BLOB NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+
   -- Where admins have put events and groups on the front page; item is 'event:<post id>' or
   -- 'group:<id>'. Events nobody has placed go by date among the others.
   CREATE TABLE IF NOT EXISTS bet_front (
@@ -636,6 +643,15 @@ const sectionsOf = (container: Container) =>
     .prepare('SELECT id, title FROM bet_sections WHERE event_id IS ? AND group_id IS ? ORDER BY position, created_at')
     .all(container.eventId, container.groupId) as { id: string; title: string }[]
 
+// The event's picture: the first one on its post on tebonsma.no, as the site shows it there. It is
+// fetched with the member's login, since the post may be for members only.
+function eventImage(postId: string) {
+  const row = db
+    .prepare('SELECT id FROM feed_attachments WHERE post_id = ? AND is_image = 1 ORDER BY position LIMIT 1')
+    .get(postId) as { id: string } | undefined
+  return row ? `/feed/attachments/${row.id}` : null
+}
+
 async function toEvents(rows: EventRow[], viewer: Viewer) {
   const members = await getMembers(rows.map(row => row.author))
   return rows.map(row => {
@@ -646,6 +662,8 @@ async function toEvents(rows: EventRow[], viewer: Viewer) {
       location: row.location,
       startsAt: row.starts_at,
       endsAt: row.ends_at,
+      // A path on the API, or null when the post has no picture
+      image: eventImage(row.id),
       // The organizer can turn betting off on tebonsma.no
       betting: row.betting === 1,
       organizer: members.get(row.author)!,
@@ -722,6 +740,30 @@ export async function getEvent(viewer: Viewer, id: string) {
   return { ...event, bets: await latestBets(viewer, 'm.event_id = ?', id) }
 }
 
+// A group's picture, for anyone to fetch like a profile picture; the address changes with it
+function groupImage(id: string) {
+  const row = db.prepare('SELECT updated_at FROM bet_group_images WHERE group_id = ?').get(id) as { updated_at: string } | undefined
+  return row ? `/tebbet/groups/${encodeURIComponent(id)}/image?v=${encodeURIComponent(row.updated_at)}` : null
+}
+
+export const readGroupImage = (id: string) =>
+  (db.prepare('SELECT data FROM bet_group_images WHERE group_id = ?').get(id) as { data: Uint8Array } | undefined)?.data ?? null
+
+// Puts up a picture for the group (JPEG), or takes it down (null). Admins only.
+export function setGroupImage(viewer: Viewer, id: string, jpeg: Uint8Array | null) {
+  assertAdmin(viewer)
+  findGroup(id)
+  if (jpeg) {
+    db.prepare(
+      `INSERT INTO bet_group_images (group_id, data, updated_at) VALUES (?, ?, ?)
+       ON CONFLICT (group_id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at`,
+    ).run(id, jpeg, now())
+  } else {
+    db.prepare('DELETE FROM bet_group_images WHERE group_id = ?').run(id)
+  }
+  return groupImage(id)
+}
+
 // A group with its undecided markets and those decided lately, in the admins' order
 function toGroup(group: GroupRow, viewer: Viewer) {
   const rows = db
@@ -733,6 +775,8 @@ function toGroup(group: GroupRow, viewer: Viewer) {
   return {
     id: group.id,
     title: group.title,
+    // A path on the API, or null until an admin puts one up
+    image: groupImage(group.id),
     // The bot that fills it, if any
     bot: group.bot,
     canManage: viewer.admin,
