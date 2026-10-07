@@ -3,13 +3,21 @@ services:
     build: .
     container_name: tebonsma-api
     restart: unless-stopped
-    env_file: .env
+    env_file:
+      - .env
+      # Written by deploy/deploy.sh; the API reports it on /version
+      - path: version.env
+        required: false
     environment:
       PORT: "8080"
       LLDAP_URL: http://lldap:17170
       OIDC_USERINFO_URL: https://auth.tebonsma.no/api/oidc/userinfo
       # Production only; local development uses the mock (npm run dev:mock)
       ALLOWED_ORIGINS: https://tebonsma.no,https://bet.tebonsma.no
+      # Where members' mail is. These are the defaults; the container has to reach ports 993, 465 and 4190.
+      MAIL_IMAP_HOST: mail.tebonsma.no
+      MAIL_SMTP_HOST: mail.tebonsma.no
+      MAIL_SIEVE_HOST: mail.tebonsma.no
     volumes:
       - data:/app/data
     # Same network as lldap and the konto-tebonsma tunnel, which routes api.tebonsma.no here

@@ -12,14 +12,23 @@
     "dev": "node --watch src/server.ts",
     "dev:mock": "node --watch dev/server.ts",
     "dev:mock:demo": "node --watch dev/server.ts --demo",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --test test/api.test.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.19.0",
-    "hono": "^4.10.0"
+    "hono": "^4.10.0",
+    "html-to-text": "^10.0.1",
+    "imapflow": "^2.2.5",
+    "mailparser": "^3.9.35",
+    "nodemailer": "^10.0.14",
+    "sanitize-html": "^2.18.0"
   },
   "devDependencies": {
+    "@types/html-to-text": "^9.0.4",
+    "@types/mailparser": "^3.9.0",
     "@types/node": "^22.18.0",
+    "@types/sanitize-html": "^2.16.2",
     "typescript": "~6.0.3"
   }
 }

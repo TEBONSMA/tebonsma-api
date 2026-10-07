@@ -244,6 +244,22 @@ export function startMockAuth(port: number) {
       }
     }
     const operation = query.match(/^\s*(?:query|mutation)\s+(\w+)/)?.[1]
+    if (operation === 'Users') {
+      return c.json({
+        data: {
+          users: [...users].map(([id, user]) => ({
+            id,
+            email: user.email,
+            displayName: user.displayName,
+            firstName: user.firstName,
+            lastName: user.lastName,
+            avatar: user.avatar,
+            creationDate: user.createdAt,
+            groups: user.groups.map(displayName => ({ displayName })),
+          })),
+        },
+      })
+    }
     // The users of one group
     if (operation === 'Members') {
       const members = [...users].filter(([, user]) => user.groups.includes(variables.group ?? ''))

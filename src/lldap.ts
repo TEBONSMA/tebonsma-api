@@ -71,6 +71,15 @@ const USER_QUERY = `
   }
 `
 
+const USERS_QUERY = `
+  query Users {
+    users {
+      id email displayName firstName lastName avatar creationDate
+      groups { displayName }
+    }
+  }
+`
+
 const MEMBERS_QUERY = `
   query Members($group: String!) {
     users(filters: { memberOf: $group }) { id }
@@ -107,6 +116,32 @@ export async function getProfile(username: string): Promise<Profile> {
     groups: user.groups.map(g => g.displayName),
     createdAt: user.creationDate,
   }
+}
+
+export async function listUsers(): Promise<Profile[]> {
+  const { users } = await graphql<{
+    users: {
+      id: string
+      email: string
+      displayName: string
+      firstName: string
+      lastName: string
+      avatar: string | null
+      creationDate: string
+      groups: { displayName: string }[]
+    }[]
+  }>(USERS_QUERY, {})
+
+  return users.map(user => ({
+    username: user.id,
+    email: user.email,
+    displayName: user.displayName,
+    firstName: user.firstName,
+    lastName: user.lastName,
+    avatar: user.avatar || null,
+    groups: user.groups.map(g => g.displayName),
+    createdAt: user.creationDate,
+  }))
 }
 
 // The usernames of everyone in a group

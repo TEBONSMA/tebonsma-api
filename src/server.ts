@@ -5,10 +5,16 @@ import { cors } from 'hono/cors'
 import { HTTPException } from 'hono/http-exception'
 import { requireCaller, type Env } from './auth.ts'
 import { betRoutes } from './betRoutes.ts'
+import { removeUnplayedMarkets } from './bets.ts'
 import { startBots } from './bots/index.ts'
 import { config } from './config.ts'
 import { eventRoutes } from './eventRoutes.ts'
 import { feedRoutes } from './feedRoutes.ts'
+import { mailRoutes } from './mailRoutes.ts'
+import { hasBackend, useBackend } from './mail/backend.ts'
+import { imapBackend } from './mail/imapBackend.ts'
+import { startScheduler } from './mail/scheduled.ts'
+import { memberRoutes } from './memberRoutes.ts'
 import { getProfile as readProfile, setAvatar, updateProfile, type ProfileChanges } from './lldap.ts'
 import { rememberProfile } from './members.ts'
 import { getLeaderboard, isGame, ScoreRejected, startRun, submitScore } from './scoreboard.ts'
@@ -34,6 +40,11 @@ app.use(
 )
 
 app.get('/health', c => c.json({ ok: true }))
+
+// Which commit is running, written by deploy/deploy.sh. The Deploy workflow on GitHub watches it.
+app.get('/version', c =>
+  c.json({ commit: process.env.COMMIT_SHA ?? null, deployedAt: process.env.DEPLOYED_AT ?? null }, 200, { 'Cache-Control': 'no-store' }),
+)
 
 const MAX_NAME_LENGTH = 64
 const CONTROL_CHARS = /[\u0000-\u001f\u007f]/
@@ -127,7 +138,9 @@ app.get('/flappy/leaderboard', requireCaller, c => gameLeaderboard(c, 'flappy-te
 
 app.route('/', feedRoutes)
 app.route('/', eventRoutes)
+app.route('/', mailRoutes)
 app.route('/', betRoutes)
+app.route('/', memberRoutes)
 
 app.onError((err, c) => {
   if (err instanceof HTTPException) return c.json({ error: err.message }, err.status)
@@ -138,8 +151,29 @@ app.onError((err, c) => {
 
 app.notFound(c => c.json({ error: 'Finnes ikke' }, 404))
 
+// The real mail server, unless a stand-in was registered first (npm run dev:mock does)
+if (!hasBackend()) useBackend(imapBackend)
+// A trial run of a new version (deploy/deploy.sh) answers requests but does nothing on its own:
+// no scheduled mail goes out, the bot stays off and no markets are cleared away
+const trial = process.env.TRIAL === '1'
+if (!trial) startScheduler()
+
 serve({ fetch: app.fetch, port: config.port }, info => {
   console.log(`tebonsma-api listening on port ${info.port}`)
 })
 
-startBots()
+if (!trial) startBots()
+
+// Markets nobody played on are cleared away a day after they close
+function clearUnplayed() {
+  try {
+    const removed = removeUnplayedMarkets()
+    if (removed > 0) console.log(`removed ${removed} unplayed ${removed === 1 ? 'market' : 'markets'}`)
+  } catch (err) {
+    console.error('could not remove unplayed markets:', err)
+  }
+}
+if (!trial) {
+  clearUnplayed()
+  setInterval(clearUnplayed, 10 * 60 * 1000)
+}

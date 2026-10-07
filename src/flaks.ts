@@ -158,6 +158,14 @@ export function doneTicketsOfMember(id: string) {
   return username ? doneTicketsOf(username) : []
 }
 
+// A free ticket to try a game: drawn by the same odds as a real one, but nothing is kept, taken
+// or paid. Its fields come all at once, since nothing hangs on them.
+export function tryTicket(gameId: string) {
+  const game = gameOf(gameId)
+  const prize = drawPrize(game)
+  return { game: game.id, gameName: game.name, price: game.price, fields: game.board(prize), prize }
+}
+
 export function buyTicket(viewer: Viewer, gameId: string) {
   const game = gameOf(gameId)
   return transaction(() => {

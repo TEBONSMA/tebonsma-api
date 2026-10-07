@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { HTTPException } from 'hono/http-exception'
 import { db, transaction } from './db.ts'
 import { voidEventMarkets } from './bets.ts'
-import { eventOf, isEvent, saveEvent, type EventInput } from './events.ts'
+import { eventOf, isEvent, isOrganizer, organizersOf, saveEvent, type EventInput } from './events.ts'
 import { getMembers, type PublicMember } from './members.ts'
 
 // Who is looking. Visitors who aren't logged in are null and only see public posts.
@@ -67,6 +67,12 @@ db.exec(`
     text     TEXT NOT NULL
   );
   CREATE INDEX IF NOT EXISTS feed_poll_options_post ON feed_poll_options (post_id);
+
+  -- Posts take their question from the text; an event's text describes the event, so its poll has its own
+  CREATE TABLE IF NOT EXISTS feed_poll_questions (
+    post_id  TEXT PRIMARY KEY REFERENCES feed_posts (id) ON DELETE CASCADE,
+    question TEXT NOT NULL
+  );
 
   CREATE TABLE IF NOT EXISTS feed_poll_votes (
     post_id   TEXT NOT NULL REFERENCES feed_posts (id) ON DELETE CASCADE,
@@ -198,7 +204,11 @@ function pollOf(postId: string, viewer: Viewer | null) {
         | { option_id: string }
         | undefined)
     : undefined
+  const question = db.prepare('SELECT question FROM feed_poll_questions WHERE post_id = ?').get(postId) as
+    | { question: string }
+    | undefined
   return {
+    question: question?.question ?? null,
     options,
     totalVotes: options.reduce((sum, option) => sum + option.votes, 0),
     myVote: mine?.option_id ?? null,
@@ -215,7 +225,8 @@ const toAttachment = (a: AttachmentRow) => ({
 })
 
 async function toPosts(rows: PostRow[], viewer: Viewer | null) {
-  const members = await getMembers(rows.map(row => row.author))
+  const organizers = new Map(rows.map(row => [row.id, organizersOf(row.id)]))
+  const members = await getMembers([...rows.map(row => row.author), ...[...organizers.values()].flat()])
   const has = (table: string, column: string, postId: string) =>
     !!viewer && !!db.prepare(`SELECT 1 FROM ${table} WHERE post_id = ? AND ${column} = ?`).get(postId, viewer.username)
 
@@ -233,11 +244,18 @@ async function toPosts(rows: PostRow[], viewer: Viewer | null) {
       pinned: row.pinned_at !== null,
       attachments: attachments.map(toAttachment),
       poll: pollOf(row.id, viewer),
-      event: eventOf(row.id, viewer, row.visibility),
+      event: eventOf(
+        row.id,
+        viewer,
+        row.visibility,
+        organizers.get(row.id)!.map(username => members.get(username)!),
+      ),
       likeCount: row.like_count,
       liked: has('feed_post_likes', 'username', row.id),
       commentCount: row.comment_count,
       mine: viewer?.username === row.author,
+      // The author, and for an event the members it was shared with
+      canEdit: !!viewer && (viewer.username === row.author || organizers.get(row.id)!.includes(viewer.username)),
       reported: has('feed_reports', 'reporter', row.id),
     }
   })
@@ -261,6 +279,31 @@ export async function listPosts(viewer: Viewer | null, sort: Sort, offset: numbe
 
   const hasMore = rows.length > limit
   return { posts: await toPosts(rows.slice(0, limit), viewer), nextOffset: hasMore ? offset + limit : null }
+}
+
+// What a member has posted, newest first: their events, or everything else. Only for members,
+// who see closed posts too.
+export async function listPostsBy(viewer: Viewer, author: string, events: boolean, offset: number, limit: number) {
+  const rows = db
+    .prepare(
+      `${POST_SELECT} LEFT JOIN events e ON e.post_id = p.id
+       WHERE p.author = ? AND (e.post_id IS NOT NULL) = ?
+       ORDER BY ${events ? 'e.starts_at IS NULL DESC, e.starts_at DESC,' : ''} p.created_at DESC LIMIT ? OFFSET ?`,
+    )
+    .all(author, events ? 1 : 0, limit + 1, offset) as unknown as PostRow[]
+
+  const hasMore = rows.length > limit
+  return { posts: await toPosts(rows.slice(0, limit), viewer), nextOffset: hasMore ? offset + limit : null }
+}
+
+export function countPostsBy(author: string) {
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS total, COUNT(e.post_id) AS events FROM feed_posts p
+       LEFT JOIN events e ON e.post_id = p.id WHERE p.author = ?`,
+    )
+    .get(author) as { total: number; events: number }
+  return { posts: row.total - row.events, events: row.events }
 }
 
 const MAX_EVENTS_LISTED = 200
@@ -290,21 +333,39 @@ export interface PostInput {
 }
 
 // Puts the listed uploads on the post in the given order and drops the ones left out.
-// Only the member's own uploads count, and never ones that belong to another post.
-function setAttachments(postId: string, owner: string, ids: string[]) {
+// Files already on the post stay, whichever organizer put them there; new ones must be
+// uploads by the member saving. Never files that belong to another post.
+function setAttachments(postId: string, saver: string, ids: string[]) {
   ids.forEach((id, position) => {
     const { changes } = db
       .prepare(
-        'UPDATE feed_attachments SET post_id = ?, position = ? WHERE id = ? AND owner = ? AND comment_id IS NULL AND (post_id IS NULL OR post_id = ?)',
+        'UPDATE feed_attachments SET post_id = ?, position = ? WHERE id = ? AND comment_id IS NULL AND (post_id = ? OR (post_id IS NULL AND owner = ?))',
       )
-      .run(postId, position, id, owner, postId)
+      .run(postId, position, id, postId, saver)
     if (changes === 0) throw new HTTPException(400, { message: 'Et vedlegg finnes ikke lenger. Last det opp på nytt.' })
   })
   const kept = ids.map(() => '?').join(', ')
   db.prepare(`DELETE FROM feed_attachments WHERE post_id = ? AND id NOT IN (${kept})`).run(postId, ...ids)
 }
 
-export function createPost(viewer: Viewer, input: PostInput, pollOptions: string[]) {
+// The author is an organizer already
+const withoutAuthor = (input: PostInput, author: string): PostInput =>
+  input.event?.organizers ? { ...input, event: { ...input.event, organizers: input.event.organizers.filter(u => u !== author) } } : input
+
+export interface PollInput {
+  question: string | null
+  options: string[]
+}
+
+function savePoll(postId: string, poll: PollInput) {
+  if (poll.question) db.prepare('INSERT INTO feed_poll_questions (post_id, question) VALUES (?, ?)').run(postId, poll.question)
+  poll.options.forEach((text, position) => {
+    db.prepare('INSERT INTO feed_poll_options (id, post_id, position, text) VALUES (?, ?, ?, ?)').run(randomUUID(), postId, position, text)
+  })
+}
+
+export function createPost(viewer: Viewer, rawInput: PostInput, poll: PollInput | null) {
+  const input = withoutAuthor(rawInput, viewer.username)
   const id = randomUUID()
   transaction(() => {
     db.prepare('INSERT INTO feed_posts (id, author, body, visibility, created_at) VALUES (?, ?, ?, ?, ?)').run(
@@ -315,9 +376,7 @@ export function createPost(viewer: Viewer, input: PostInput, pollOptions: string
       now(),
     )
     setAttachments(id, viewer.username, input.attachmentIds)
-    pollOptions.forEach((text, position) => {
-      db.prepare('INSERT INTO feed_poll_options (id, post_id, position, text) VALUES (?, ?, ?, ?)').run(randomUUID(), id, position, text)
-    })
+    if (poll) savePoll(id, poll)
     if (input.event) {
       saveEvent(id, input.event)
       announce('event', viewer.username, id, input.event.title)
@@ -326,15 +385,25 @@ export function createPost(viewer: Viewer, input: PostInput, pollOptions: string
   return getPost(viewer, id)
 }
 
-export function updatePost(viewer: Viewer, id: string, input: PostInput) {
+const sameMembers = (a: string[], b: string[]) => a.length === b.length && a.every(username => b.includes(username))
+
+export function updatePost(viewer: Viewer, id: string, rawInput: PostInput) {
   const post = findPost(viewer, id)
-  if (post.author !== viewer.username) throw new HTTPException(403, { message: 'Du kan bare redigere egne innlegg' })
+  const input = withoutAuthor(rawInput, post.author)
+  const isAuthor = post.author === viewer.username
+  if (!isAuthor && !isOrganizer(id, viewer.username)) {
+    throw new HTTPException(403, { message: 'Du kan bare redigere egne innlegg og arrangementer du er arrangør for' })
+  }
   // An event stays an event, and a post a post
   if (isEvent(id) !== (input.event !== null)) throw new HTTPException(400, { message: 'Ugyldig forespørsel' })
+  // Only the one who made the event picks who else organizes it
+  if (!isAuthor && input.event?.organizers && !sameMembers(input.event.organizers, organizersOf(id))) {
+    throw new HTTPException(403, { message: 'Bare den som opprettet arrangementet kan endre arrangørene' })
+  }
 
   transaction(() => {
     db.prepare('UPDATE feed_posts SET body = ?, visibility = ?, edited_at = ? WHERE id = ?').run(input.body, input.visibility, now(), id)
-    setAttachments(id, post.author, input.attachmentIds)
+    setAttachments(id, viewer.username, input.attachmentIds)
     if (input.event) saveEvent(id, input.event)
   })
   return getPost(viewer, id)
@@ -379,6 +448,20 @@ async function likers(table: string, column: string, id: string): Promise<Public
 export function getPostLikers(viewer: Viewer, id: string) {
   findPost(viewer, id)
   return likers('feed_post_likes', 'post_id', id)
+}
+
+// Whoever arranges the event can add a poll to it, to settle what is still open. Once.
+export function addEventPoll(viewer: Viewer, id: string, poll: PollInput) {
+  const post = findPost(viewer, id)
+  if (!isEvent(id)) throw new HTTPException(404, { message: 'Arrangementet finnes ikke' })
+  if (post.author !== viewer.username && !isOrganizer(id, viewer.username)) {
+    throw new HTTPException(403, { message: 'Bare arrangørene kan legge til en spørreundersøkelse' })
+  }
+  transaction(() => {
+    if (pollOf(id, viewer)) throw new HTTPException(400, { message: 'Arrangementet har allerede en spørreundersøkelse' })
+    savePoll(id, poll)
+  })
+  return pollOf(id, viewer)
 }
 
 // One vote per member. Passing no option takes the vote back.
@@ -520,8 +603,8 @@ export async function addComment(viewer: Viewer, postId: string, body: string, p
       if (changes === 0) throw new HTTPException(400, { message: 'Et vedlegg finnes ikke lenger. Last det opp på nytt.' })
     })
 
-    // The post's author hears about every comment, and whoever is answered about the reply
-    const recipients = new Map([[post.author, 'comment']])
+    // The post's author, and the organizers of an event, hear about every comment, and whoever is answered about the reply
+    const recipients = new Map([post.author, ...organizersOf(postId)].map(username => [username, 'comment']))
     if (parent) recipients.set(parent.author, 'reply')
     recipients.delete(viewer.username)
     for (const [recipient, kind] of recipients) {
@@ -584,7 +667,7 @@ export function getCommentLikers(viewer: Viewer, id: string) {
 // --- Attachments ---
 
 // Only these are shown as pictures. Everything else, SVG included, is a download.
-function sniffImage(bytes: Uint8Array) {
+export function sniffImage(bytes: Uint8Array) {
   const starts = (...signature: number[]) => signature.every((byte, i) => bytes[i] === byte)
   if (starts(0xff, 0xd8, 0xff)) return 'image/jpeg'
   if (starts(0x89, 0x50, 0x4e, 0x47)) return 'image/png'
@@ -659,7 +742,9 @@ function announce(kind: AnnouncementKind, actor: string, postId: string, body: s
 export function sendAnnouncement(viewer: Viewer, id: string, body: string) {
   const post = findPost(viewer, id)
   if (!isEvent(id)) throw new HTTPException(404, { message: 'Arrangementet finnes ikke' })
-  if (post.author !== viewer.username) throw new HTTPException(403, { message: 'Bare den som opprettet arrangementet kan sende kunngjøringer' })
+  if (post.author !== viewer.username && !isOrganizer(id, viewer.username)) {
+    throw new HTTPException(403, { message: 'Bare arrangørene kan sende kunngjøringer' })
+  }
   announce('announcement', viewer.username, id, body)
 }
 

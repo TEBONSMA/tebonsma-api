@@ -33,7 +33,7 @@ async function event(title: string, location: string, startsIn: number, hours: n
       attachmentIds: [],
       event: { title, location, startsAt: at(startsIn), endsAt: at(startsIn + hours) },
     },
-    [],
+    null,
   )
   return post.id
 }
@@ -68,7 +68,7 @@ async function play(viewer: Viewer, stake: number, outcomeIds: string[]) {
 // Over or under a line, at whatever the odds are right now
 async function playLine(viewer: Viewer, stake: number, marketId: string, side: 'over' | 'under', line: number) {
   const market = (await getEvent(viewer, party)).markets.find(m => m.id === marketId)!
-  const chance = market.outcomes.reduce((sum, o) => (side === 'over' ? o.value! > line : o.value! < line) ? sum + o.price : sum, 0)
+  const chance = market.outcomes.reduce((sum, o) => (side === 'over' ? o.value! > line : o.value! < line) ? sum + (o.price ?? 0) : sum, 0)
   ensureAccount(viewer.username)
   placeSlips(viewer, [{ stake, selections: [{ marketId, side, line, odds: oddsAt(chance) / 100 }] }])
 }
