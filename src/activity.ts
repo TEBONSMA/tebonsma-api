@@ -1,12 +1,14 @@
-import { toSlips, type SlipRow } from './bets.ts'
+import { hiddenFor, toSlips, type SlipRow } from './bets.ts'
 import { BOT } from './bots/bot.ts'
 import { db } from './db.ts'
+import type { Viewer } from './feed.ts'
 import { GAMES } from './flaksGames.ts'
 import { getMembers } from './members.ts'
 
 // Activity: everything that happens on TebBet in one log, the newest first. Every slip played,
 // every market decided or called off, and every scratch card scratched to the end, a page at a
-// time. Everyone sees the same log; who played what is already shown on each event and group.
+// time. Everyone sees the same log; who played what is already shown on each event and group,
+// but not the odds on markets the viewer is kept out of.
 
 const PAGE = 50
 
@@ -46,7 +48,7 @@ function answerOf(row: ResultRow, winners: Map<string, string[]>) {
 }
 
 // One page of the log, older than `before` when given; only some kinds when asked
-export async function listActivity(before: string | null, kinds: readonly ActivityKind[]) {
+export async function listActivity(viewer: Viewer, before: string | null, kinds: readonly ActivityKind[]) {
   // Later than any time stored, so the first page starts from now
   const until = before ?? '9999'
   const slips = kinds.includes('slip')
@@ -90,7 +92,7 @@ export async function listActivity(before: string | null, kinds: readonly Activi
 
   const deciders = results.map(row => row.settled_by).filter((name): name is string => !!name && name !== BOT.username)
   const members = await getMembers([...slips.map(row => row.username), ...tickets.map(row => row.username), ...deciders])
-  const slipsById = new Map(toSlips(slips).map(slip => [slip.id, slip]))
+  const slipsById = new Map(toSlips(slips, hiddenFor(viewer.username)).map(slip => [slip.id, slip]))
 
   const items = [
     ...slips.map(row => ({

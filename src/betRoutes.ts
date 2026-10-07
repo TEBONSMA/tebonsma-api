@@ -395,13 +395,13 @@ betRoutes.get('/bet/activity', async c => {
   const kind = c.req.query('kind')
   if (kind !== undefined && !ACTIVITY_KINDS.includes(kind as ActivityKind)) throw bad('Ugyldig type')
   const kinds = kind === undefined ? ACTIVITY_KINDS : [kind as ActivityKind]
-  return c.json(await listActivity(before === undefined ? null : new Date(before).toISOString(), kinds))
+  return c.json(await listActivity(viewerOf(c), before === undefined ? null : new Date(before).toISOString(), kinds))
 })
 betRoutes.get('/bet/leaderboard', async c => c.json(await getLeaderboard()))
 // Another member's page: their place, coins and slips (?status=open|settled)
 // With the scratch cards they have finished among the settled
 betRoutes.get('/bet/members/:id', async c => {
   const settled = c.req.query('status') === 'settled'
-  const page = await getMemberPage(id(c), settled)
+  const page = await getMemberPage(viewerOf(c), id(c), settled)
   return c.json({ ...page, tickets: settled ? doneTicketsOfMember(id(c)) : [] })
 })

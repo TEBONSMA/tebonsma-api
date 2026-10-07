@@ -331,4 +331,32 @@ describe('TebBet', () => {
     assert.ok(results.data.items.every((item: any) => item.kind === 'result'))
     assert.equal((await call('GET', '/bet/activity?kind=nope', 'kari')).status, 400)
   })
+
+  it('hides the odds on a market from a member kept out of it, wherever they show', async () => {
+    const members = await call('GET', '/bet/members', 'admin')
+    const kari = members.data.find((m: any) => m.name === 'Kari Nordmann')
+    const group = await call('POST', '/bet/groups', 'admin', { title: 'Om Kari' })
+    const created = await call('POST', `/bet/groups/${group.data.id}/markets`, 'admin', {
+      question: 'Kommer Kari for seint?',
+      kind: 'yesno',
+      outcomes: [{ label: 'Ja', odds: 1.5 }, { label: 'Nei', odds: 3 }],
+      excluded: [kari.id],
+    })
+    assert.equal(created.status, 201, JSON.stringify(created.data))
+    const yes = created.data.outcomes[0]
+    assert.equal((await call('POST', '/bet/slips', 'dev', { slips: [{ stake: 50, selections: [{ outcomeId: yes.id, odds: yes.odds }] }] })).status, 201)
+
+    const seen = (await call('GET', `/bet/groups/${group.data.id}`, 'kari')).data
+    const market = seen.markets[0]
+    assert.equal(market.blocked, true)
+    assert.ok(market.outcomes.every((o: any) => o.odds === null && o.price === null && o.staked === null))
+    assert.equal(seen.bets[0].odds, null)
+    const log = (await call('GET', '/bet/activity?kind=slip', 'kari')).data.items[0]
+    assert.equal(log.slip.odds, null)
+    assert.equal(log.slip.potentialPayout, null)
+    assert.equal(log.slip.selections[0].odds, null)
+
+    // Others still see them
+    assert.equal(typeof (await call('GET', '/bet/activity?kind=slip', 'ola')).data.items[0].slip.odds, 'number')
+  })
 })

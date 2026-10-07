@@ -105,7 +105,8 @@ TebBet. Markets that aren't about an event are in **groups**, like "Andre spill"
 "Sponsorer", which admins make, rename and run; admins also set the order of events and groups
 on the front page. The group "Landslaget" is filled by the bot (below). Whoever opens a market can
 keep members out of it, typically the one it is about: they see it but can't play on it, and
-bets they placed before stand. A **slip** is one bet:
+bets they placed before stand. They don't see its odds or how the coins on it are spread, on the
+market or in anyone's bets. A **slip** is one bet:
 a stake on one outcome (single), or on outcomes in several markets that must all happen
 (combination, odds multiplied). Odds are locked when a slip is played. When a market is
 decided, slips are paid at once; when it is called off, or its event deleted, stakes are paid

@@ -548,7 +548,17 @@ const excludedFrom = (marketId: string) =>
     )
     .all(marketId) as { id: string; name: string }[]
 
+// The markets a member is kept out of. They see them, but not the odds or how the coins on them
+// are spread, there or in anyone's bets.
+export const hiddenFor = (username: string) =>
+  new Set(
+    (db.prepare('SELECT market_id FROM bet_exclusions WHERE username = ?').all(username) as { market_id: string }[]).map(
+      row => row.market_id,
+    ),
+  )
+
 function toMarket(market: MarketRow, viewer: Viewer) {
+  const blocked = isExcluded(market.id, viewer.username)
   const outcomes = outcomesOf(market.id)
   const rule = market.rule ? (JSON.parse(market.rule) as Rule) : null
   const current = pricesOf(market, outcomes)
@@ -593,19 +603,20 @@ function toMarket(market: MarketRow, viewer: Viewer) {
       id: o.id,
       label: o.label,
       value: o.value,
-      // What the market maker thinks the chance is; the site works out a stake's odds from it
-      price: current[i],
-      odds: toOdds(oddsAt(current[i])),
-      openingOdds: toOdds(o.opening_odds),
-      staked: o.staked,
-      bets: o.bets,
+      // What the market maker thinks the chance is; the site works out a stake's odds from it.
+      // These are null for a member kept out of the market.
+      price: blocked ? null : current[i],
+      odds: blocked ? null : toOdds(oddsAt(current[i])),
+      openingOdds: blocked ? null : toOdds(o.opening_odds),
+      staked: blocked ? null : o.staked,
+      bets: blocked ? null : o.bets,
     })),
     staked: totals.staked,
     bets: totals.bets,
     // What the viewer has on it: by outcome id, or "over:4.5" for a side of a line
     mine: Object.fromEntries(mine.map(row => [row.outcome_id ?? `${row.side}:${row.line}`, row.stake])),
     // The viewer is kept out of this market
-    blocked: isExcluded(market.id, viewer.username),
+    blocked,
     excluded: excludedFrom(market.id),
     // The bot decides it: how, in words, and what it found when it did
     autoRule: rule && describeRule(rule),
@@ -663,8 +674,10 @@ export function listEvents(viewer: Viewer) {
   return toEvents(rows, viewer)
 }
 
-// The latest bets on the markets that match the condition
-async function latestBets(condition: string, ...params: string[]) {
+// The latest bets on the markets that match the condition, without the odds on markets the
+// viewer is kept out of
+async function latestBets(viewer: Viewer, condition: string, ...params: string[]) {
+  const hidden = hiddenFor(viewer.username)
   const rows = db
     .prepare(
       `SELECT s.slip_id, s.market_id, s.outcome_id, s.side, s.line, s.odds, sl.username, sl.stake, sl.created_at, o.label,
@@ -697,7 +710,7 @@ async function latestBets(condition: string, ...params: string[]) {
     outcomeId: row.outcome_id,
     label: labelOf(row),
     stake: row.stake,
-    odds: toOdds(row.odds),
+    odds: hidden.has(row.market_id) ? null : toOdds(row.odds),
     combination: row.legs > 1,
     createdAt: row.created_at,
   }))
@@ -706,7 +719,7 @@ async function latestBets(condition: string, ...params: string[]) {
 // One event with every market on it and the latest bets
 export async function getEvent(viewer: Viewer, id: string) {
   const [event] = await toEvents([findEvent(id)], viewer)
-  return { ...event, bets: await latestBets('m.event_id = ?', id) }
+  return { ...event, bets: await latestBets(viewer, 'm.event_id = ?', id) }
 }
 
 // A group with its undecided markets and those decided lately, in the admins' order
@@ -737,7 +750,7 @@ export function listGroups(viewer: Viewer) {
 
 // One group with the latest bets in it
 export async function getGroup(viewer: Viewer, id: string) {
-  return { ...toGroup(findGroup(id), viewer), bets: await latestBets('m.group_id = ?', id) }
+  return { ...toGroup(findGroup(id), viewer), bets: await latestBets(viewer, 'm.group_id = ?', id) }
 }
 
 // Lowercase letters, digits and dashes, from the title: "Trondheim by" is trondheim-by
@@ -1437,20 +1450,23 @@ function legsOf(slipIds: string[]) {
     .all(...slipIds) as unknown as LegRow[]
 }
 
-export function toSlips(rows: SlipRow[]) {
+// hidden: markets whose odds the viewer may not see (hiddenFor); a slip with a leg on one shows
+// neither that leg's odds nor its own
+export function toSlips(rows: SlipRow[], hidden: Set<string> = new Set()) {
   const legs = legsOf(rows.map(row => row.id))
-  return rows.map(row => ({
-    id: row.id,
-    stake: row.stake,
-    odds: toOdds(row.odds),
-    potentialPayout: payoutFor(row.stake, row.odds),
-    status: row.status,
-    payout: row.payout,
-    createdAt: row.created_at,
-    settledAt: row.settled_at,
-    selections: legs
-      .filter(leg => leg.slip_id === row.id)
-      .map(leg => ({
+  return rows.map(row => {
+    const ours = legs.filter(leg => leg.slip_id === row.id)
+    const secret = ours.some(leg => hidden.has(leg.market_id))
+    return {
+      id: row.id,
+      stake: row.stake,
+      odds: secret ? null : toOdds(row.odds),
+      potentialPayout: secret ? null : payoutFor(row.stake, row.odds),
+      status: row.status,
+      payout: row.payout,
+      createdAt: row.created_at,
+      settledAt: row.settled_at,
+      selections: ours.map(leg => ({
         marketId: leg.market_id,
         eventId: leg.event_id,
         // Missing for markets that aren't about an event, or when the event has been deleted
@@ -1461,10 +1477,11 @@ export function toSlips(rows: SlipRow[]) {
         question: leg.question,
         outcomeId: leg.outcome_id,
         label: labelOf(leg),
-        odds: toOdds(leg.odds),
+        odds: hidden.has(leg.market_id) ? null : toOdds(leg.odds),
         result: resultOf(leg),
       })),
-  }))
+    }
+  })
 }
 
 export type Slip = ReturnType<typeof toSlips>[number]
@@ -1478,14 +1495,14 @@ export function getSlips(viewer: Viewer, ids: string[]) {
 }
 
 // A member's slips: the ones still running, or the ones that are done
-function slipsOf(username: string, settled: boolean) {
+function slipsOf(username: string, settled: boolean, hidden?: Set<string>) {
   const rows = db
     .prepare(
       `SELECT * FROM bet_slips WHERE username = ? AND (status = 'open') = ?
        ORDER BY COALESCE(settled_at, created_at) DESC LIMIT ?`,
     )
     .all(username, settled ? 0 : 1, SLIPS_SHOWN) as unknown as SlipRow[]
-  return toSlips(rows)
+  return toSlips(rows, hidden)
 }
 
 export const listSlips = (viewer: Viewer, settled: boolean) => slipsOf(viewer.username, settled)
@@ -1579,7 +1596,7 @@ export async function getLeaderboard() {
 
 // A member's page, by their public id: where they stand on the leaderboard and their slips.
 // Bets are open to every member anyway; the account statement stays the member's own.
-export async function getMemberPage(id: string, settled: boolean) {
+export async function getMemberPage(viewer: Viewer, id: string, settled: boolean) {
   const username = usernameOf(id)
   if (!username) throw new HTTPException(404, { message: 'Medlemmet finnes ikke' })
   const leaderboard = await getLeaderboard()
@@ -1594,6 +1611,7 @@ export async function getMemberPage(id: string, settled: boolean) {
     total: row?.total ?? 0,
     played: row?.played ?? 0,
     won: row?.won ?? 0,
-    slips: slipsOf(username, settled),
+    // Without the odds on markets the viewer is kept out of, unless they are the viewer's own
+    slips: slipsOf(username, settled, username === viewer.username ? undefined : hiddenFor(viewer.username)),
   }
 }
