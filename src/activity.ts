@@ -1,4 +1,4 @@
-import { hiddenFor, toSlips, type SlipRow } from './bets.ts'
+import { hiddenFor, labelOf, resultOf, toOdds, toSlips, type LegResultRow, type SelectionResult, type SlipRow } from './bets.ts'
 import { BOT } from './bots/bot.ts'
 import { db } from './db.ts'
 import type { Viewer } from './feed.ts'
@@ -37,6 +37,80 @@ interface TicketRow {
   price: number
   prize: number
   done_at: string
+}
+
+// A pick on a decided market, with the slip it is on
+interface PickRow extends LegResultRow {
+  market_id: string
+  slip_id: string
+  label: string | null
+  odds: number
+  username: string
+  stake: number
+  slip_status: 'open' | 'won' | 'lost' | 'void'
+  payout: number
+  slip_odds: number
+  legs: number
+}
+
+const ORDER: Record<SelectionResult, number> = { won: 0, pending: 1, void: 2, lost: 3 }
+
+// Everyone who played on the decided markets, by market: what they picked, at what odds, whether
+// it came true, and what their slip won or lost all told. A slip with several outcomes of one
+// multi market is one entry. On markets the viewer is kept out of, the odds stay hidden, and so
+// does what a winner got, since that gives the odds away.
+function playersOn(marketIds: string[]) {
+  const byMarket = new Map<string, PickRow[][]>()
+  if (marketIds.length === 0) return byMarket
+  const rows = db
+    .prepare(
+      `SELECT s.market_id, s.slip_id, s.outcome_id, s.side, s.line, s.odds, o.label, o.won, m.status, m.result_value,
+         sl.username, sl.stake, sl.status AS slip_status, sl.payout, sl.odds AS slip_odds,
+         (SELECT COUNT(*) FROM bet_selections x WHERE x.slip_id = s.slip_id) AS legs
+       FROM bet_selections s
+       JOIN bet_slips sl ON sl.id = s.slip_id
+       JOIN bet_markets m ON m.id = s.market_id
+       LEFT JOIN bet_outcomes o ON o.id = s.outcome_id
+       WHERE s.market_id IN (${marketIds.map(() => '?').join(', ')})
+       ORDER BY sl.created_at`,
+    )
+    .all(...marketIds) as unknown as PickRow[]
+  for (const row of rows) {
+    const slips = byMarket.get(row.market_id) ?? []
+    const same = slips.find(picks => picks[0].slip_id === row.slip_id)
+    if (same) same.push(row)
+    else slips.push([row])
+    byMarket.set(row.market_id, slips)
+  }
+  return byMarket
+}
+
+function toPlayer(picks: PickRow[], hidden: Set<string>) {
+  const [first] = picks
+  const secret = hidden.has(first.market_id)
+  const results = picks.map(resultOf)
+  const result: SelectionResult = results.includes('lost')
+    ? 'lost'
+    : results.every(r => r === 'void')
+      ? 'void'
+      : results.includes('pending')
+        ? 'pending'
+        : 'won'
+  // What the slip came to: its payout less the stake, or nothing yet while other markets on it wait
+  const gain =
+    first.slip_status === 'won' ? first.payout - first.stake : first.slip_status === 'lost' ? -first.stake : first.slip_status === 'void' ? 0 : null
+  return {
+    username: first.username,
+    label: picks.map(labelOf).join(', '),
+    odds: secret ? null : Math.round(picks.reduce((product, pick) => product * toOdds(pick.odds), 1) * 100) / 100,
+    stake: first.stake,
+    // Whether the pick on this market came true
+    result,
+    // Set when the slip is a combination: how many picks it has and its odds all told
+    combination: first.legs > picks.length ? { legs: first.legs, odds: secret ? null : toOdds(first.slip_odds) } : null,
+    slip: first.slip_status,
+    gain: secret && gain !== null && gain > 0 ? null : gain,
+  }
 }
 
 // What a decided market came to, as members read it: "Ja", "Lag A, Lag C", "7" (over/under), or
@@ -90,9 +164,12 @@ export async function listActivity(viewer: Viewer, before: string | null, kinds:
     for (const row of rows) winners.set(row.market_id, [...(winners.get(row.market_id) ?? []), row.label])
   }
 
+  const hidden = hiddenFor(viewer.username)
+  const players = playersOn(results.map(row => row.id))
   const deciders = results.map(row => row.settled_by).filter((name): name is string => !!name && name !== BOT.username)
-  const members = await getMembers([...slips.map(row => row.username), ...tickets.map(row => row.username), ...deciders])
-  const slipsById = new Map(toSlips(slips, hiddenFor(viewer.username)).map(slip => [slip.id, slip]))
+  const bettors = [...players.values()].flat().map(picks => picks[0].username)
+  const members = await getMembers([...slips.map(row => row.username), ...tickets.map(row => row.username), ...deciders, ...bettors])
+  const slipsById = new Map(toSlips(slips, hidden).map(slip => [slip.id, slip]))
 
   const items = [
     ...slips.map(row => ({
@@ -117,6 +194,11 @@ export async function listActivity(viewer: Viewer, before: string | null, kinds:
       decidedBy: row.settled_by === BOT.username ? 'TebBet-boten' : row.settled_by ? (members.get(row.settled_by)?.name ?? null) : null,
       // How many slips were on it
       bets: row.bets,
+      // Everyone who played on it, winners first
+      players: (players.get(row.id) ?? [])
+        .map(picks => toPlayer(picks, hidden))
+        .sort((a, b) => ORDER[a.result] - ORDER[b.result] || (b.gain ?? 0) - (a.gain ?? 0) || b.stake - a.stake)
+        .map(({ username, ...player }) => ({ member: members.get(username)!, ...player })),
     })),
     ...tickets.map(row => ({
       kind: 'ticket' as const,

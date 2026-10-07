@@ -294,7 +294,7 @@ db.exec(`
 
 const now = () => new Date().toISOString()
 const bad = (message: string) => new HTTPException(400, { message })
-const toOdds = (hundredths: number) => hundredths / 100
+export const toOdds = (hundredths: number) => hundredths / 100
 
 // --- Accounts ---
 
@@ -992,7 +992,7 @@ function settleSlipsOn(marketId: string) {
   for (const { slip_id } of slips) settleSlip(slip_id)
 }
 
-interface LegResultRow {
+export interface LegResultRow {
   outcome_id: string | null
   side: Side | null
   line: number | null
@@ -1003,7 +1003,7 @@ interface LegResultRow {
   result_value: number | null
 }
 
-function resultOf(leg: LegResultRow): SelectionResult {
+export function resultOf(leg: LegResultRow): SelectionResult {
   if (leg.status === 'void') return 'void'
   if (leg.status !== 'settled') return 'pending'
   if (leg.side) {
@@ -1430,7 +1430,7 @@ interface LegRow extends LegResultRow {
 }
 
 // What a selection is on, as members read it: "Ja", "Lag 2" or "Over 4,5"
-const labelOf = (row: { label: string | null; side: Side | null; line: number | null }) =>
+export const labelOf = (row: { label: string | null; side: Side | null; line: number | null }) =>
   row.side ? lineLabel(row.side, row.line!) : row.label!
 
 function legsOf(slipIds: string[]) {

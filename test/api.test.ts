@@ -324,6 +324,12 @@ describe('TebBet', () => {
     assert.equal(log.status, 200)
     assert.equal(log.data.items[0].kind, 'result')
     assert.equal(log.data.items[0].answer, 'Nei')
+    const [player] = log.data.items[0].players
+    assert.equal(player.member.name, 'Dev Bruker')
+    assert.equal(player.label, 'Ja')
+    assert.equal(player.result, 'lost')
+    assert.equal(player.gain, -100)
+    assert.equal(player.combination.legs, 2)
     const slip = log.data.items.find((item: any) => item.kind === 'slip')
     assert.equal(slip.slip.selections.length, 2)
     assert.equal(slip.slip.status, 'lost')
@@ -358,6 +364,16 @@ describe('TebBet', () => {
 
     // Others still see them
     assert.equal(typeof (await call('GET', '/bet/activity?kind=slip', 'ola')).data.items[0].slip.odds, 'number')
+
+    // Once decided, the result lists who won, but not at what odds or for how much to Kari
+    assert.equal((await call('POST', `/bet/markets/${created.data.id}/settle`, 'admin', { outcomeId: yes.id })).status, 200)
+    const forKari = (await call('GET', '/bet/activity?kind=result', 'kari')).data.items[0].players[0]
+    assert.equal(forKari.result, 'won')
+    assert.equal(forKari.odds, null)
+    assert.equal(forKari.gain, null)
+    const forOla = (await call('GET', '/bet/activity?kind=result', 'ola')).data.items[0].players[0]
+    assert.equal(typeof forOla.odds, 'number')
+    assert.ok(forOla.gain > 0)
   })
 
   it('lets a member try a scratch card for free', async () => {
