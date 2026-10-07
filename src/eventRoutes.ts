@@ -27,7 +27,7 @@ eventRoutes.get('/events', async c =>
 
 eventRoutes.put('/events/:id/rsvp', requireCaller, async c => {
   const { answer } = await readBody(c)
-  if (answer !== 'yes' && answer !== 'no' && answer !== null) throw bad('Svar ja eller nei')
+  if (answer !== 'yes' && answer !== 'maybe' && answer !== 'no' && answer !== null) throw bad('Svar ja, kanskje eller nei')
   const viewer = viewerOf(c)
   // Fetching the post checks that the member can see it
   const post = await getPost(viewer, c.req.param('id'))
