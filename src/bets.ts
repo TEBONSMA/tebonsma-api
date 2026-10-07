@@ -1,11 +1,12 @@
 import { randomInt, randomUUID } from 'node:crypto'
 import { HTTPException } from 'hono/http-exception'
 import { config } from './config.ts'
-import { db, transaction } from './db.ts'
+import { afterCommit, db, transaction } from './db.ts'
 import { colorOf, ROULETTE_ODDS, spotLabel, wins, type RouletteSpot } from './roulette.ts'
 import type { Viewer } from './feed.ts'
 import { listGroupMembers } from './lldap.ts'
 import { getMembers, usernameOf } from './members.ts'
+import { pushTo } from './push.ts'
 import { describeRule, type Rule } from './bots/rules.ts'
 import {
   combine,
@@ -1071,7 +1072,9 @@ export function resultOf(leg: LegResultRow): SelectionResult {
   return leg.won ? 'won' : 'lost'
 }
 
-function settleSlip(slipId: string) {
+// tell: whether the member gets a push notification when the slip is decided. Not for a
+// roulette miss as the slip is placed, which the member sees at once.
+function settleSlip(slipId: string, tell = true) {
   const slip = db.prepare('SELECT username, stake, status, settled_at FROM bet_slips WHERE id = ?').get(slipId) as {
     username: string
     stake: number
@@ -1128,6 +1131,32 @@ function settleSlip(slipId: string) {
       slipId,
     )
   }
+  if (tell && slip.status === 'open' && status !== 'open') {
+    const message = decidedMessage(slipId, status, payout, slip.stake)
+    afterCommit(() => pushTo('tebbet', [slip.username], message))
+  }
+}
+
+const coinFormat = new Intl.NumberFormat('nb-NO')
+
+// The push notification for a slip that has just been decided
+function decidedMessage(slipId: string, status: 'won' | 'lost' | 'void', payout: number, stake: number) {
+  const legs = db
+    .prepare(
+      `SELECT o.label, s.side, s.line, m.question FROM bet_selections s
+       JOIN bet_markets m ON m.id = s.market_id LEFT JOIN bet_outcomes o ON o.id = s.outcome_id
+       WHERE s.slip_id = ?`,
+    )
+    .all(slipId) as { label: string | null; side: Side | null; line: number | null; question: string }[]
+  const roulette = db.prepare('SELECT 1 FROM bet_roulette_legs WHERE slip_id = ?').get(slipId) !== undefined
+  const count = legs.length + (roulette ? 1 : 0)
+  const what = count === 1 ? `${labelOf(legs[0])} · ${legs[0].question}` : `Kombinasjon med ${count} spill`
+  const title = {
+    won: `Du vant ${coinFormat.format(payout)} T`,
+    lost: 'Spillet ditt tapte',
+    void: `Spillet ditt ble annullert, ${coinFormat.format(stake)} T tilbake`,
+  }[status]
+  return { title, body: what, url: '/mine-spill?vis=avgjorte', tag: `slip:${slipId}` }
 }
 
 // What the bot found when it decided a market, with a link to it
@@ -1489,7 +1518,7 @@ export function placeSlips(viewer: Viewer, slips: SlipInput[]) {
           landed,
           wins(roulette, landed) ? 1 : 0,
         )
-        settleSlip(id)
+        settleSlip(id, false)
       }
       return id
     })
