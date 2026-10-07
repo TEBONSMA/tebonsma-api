@@ -145,6 +145,7 @@ can get a new closing time.
 | GET | `/bet/flaks` | The scratch cards (price, prizes and odds, rules) and own tickets not scratched to the end |
 | GET | `/bet/flaks/done` | Own tickets scratched to the end |
 | POST | `/bet/flaks/:game/buy` | Buy a ticket; its outcome is drawn now |
+| POST | `/bet/flaks/:game/try` | A free ticket to try the game, with every field at once; nothing is kept, taken or paid |
 | POST | `/bet/flaks/tickets/:id/scratch` | Scratch `{ field }`, or `{}` for every field left; the last one pays the prize |
 | POST | `/bet/casino/roulette/spin` | Roulette: `{ bets: [{ type, number?, stake }] }`, settled at once |
 

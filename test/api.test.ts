@@ -359,4 +359,15 @@ describe('TebBet', () => {
     // Others still see them
     assert.equal(typeof (await call('GET', '/bet/activity?kind=slip', 'ola')).data.items[0].slip.odds, 'number')
   })
+
+  it('lets a member try a scratch card for free', async () => {
+    const before = (await call('GET', '/bet/me', 'ola')).data.balance
+    const ticket = await call('POST', '/bet/flaks/underbergen/try', 'ola')
+    assert.equal(ticket.status, 200, JSON.stringify(ticket.data))
+    assert.equal(ticket.data.fields.length, 9)
+    assert.equal(typeof ticket.data.prize, 'number')
+    assert.equal((await call('GET', '/bet/me', 'ola')).data.balance, before, 'no coins move')
+    assert.equal((await call('GET', '/bet/flaks', 'ola')).data.tickets.length, 0, 'nothing is kept')
+    assert.equal((await call('POST', '/bet/flaks/finnes-ikke/try', 'ola')).status, 404)
+  })
 })

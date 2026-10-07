@@ -48,6 +48,7 @@ import {
   openTickets,
   ROULETTE_TYPES,
   scratch,
+  tryTicket,
   spinRoulette,
   type RouletteBet,
 } from './flaks.ts'
@@ -373,6 +374,8 @@ betRoutes.post('/bet/flaks/:game/buy', async c => {
   const ticket = buyTicket(viewer, c.req.param('game') ?? '')
   return c.json({ ticket, account: await getAccount(viewer) }, 201)
 })
+// A free ticket to try the game, with every field; no coins move
+betRoutes.post('/bet/flaks/:game/try', c => c.json(tryTicket(c.req.param('game') ?? '')))
 // { field } scratches one field, {} all that are left
 betRoutes.post('/bet/flaks/tickets/:id/scratch', async c => {
   const viewer = viewerOf(c)
