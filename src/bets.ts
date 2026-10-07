@@ -1156,22 +1156,6 @@ export function deleteMarket(viewer: Viewer, id: string) {
   db.prepare('DELETE FROM bet_markets WHERE id = ?').run(id)
 }
 
-// A market nobody played on is removed a day after it closed. Until then the organizer can
-// still give it a new closing time, if it closed too early.
-const UNPLAYED_KEPT_MS = 24 * 60 * 60 * 1000
-
-export function removeUnplayedMarkets() {
-  const closedBefore = new Date(Date.now() - UNPLAYED_KEPT_MS).toISOString()
-  const { changes } = db
-    .prepare(
-      `DELETE FROM bet_markets
-       WHERE closes_at IS NOT NULL AND closes_at <= ?
-         AND NOT EXISTS (SELECT 1 FROM bet_selections WHERE market_id = bet_markets.id)`,
-    )
-    .run(closedBefore)
-  return Number(changes)
-}
-
 // Called in the same transaction that deletes an event: its undecided markets are called
 // off, so nobody loses the coins they had on them
 export function voidEventMarkets(eventId: string) {

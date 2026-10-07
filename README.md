@@ -100,8 +100,7 @@ a stake on one outcome (single), or on outcomes in several markets that must all
 (combination, odds multiplied). Odds are locked when a slip is played. When a market is
 decided, slips are paid at once; when it is called off, or its event deleted, stakes are paid
 back, and in a combination it counts as odds 1,00. Reopening a decided market takes what it
-paid back out again. A market nobody played on is removed a day after it closed; until then it
-can get a new closing time.
+paid back out again.
 
 | Method | Path | Does |
 |---|---|---|
