@@ -1,5 +1,6 @@
 import { serve } from '@hono/node-server'
 import { Hono } from 'hono'
+import { deleteCookie, getCookie, setCookie } from 'hono/cookie'
 import { cors } from 'hono/cors'
 import { html } from 'hono/html'
 
@@ -73,6 +74,8 @@ const users = new Map<string, MockUser>([
 const ACCESS_PREFIX = 'mock-access.'
 const REFRESH_PREFIX = 'mock-refresh.'
 const TOKEN_LIFETIME_SECONDS = 8 * 60 * 60
+// Who is logged in here, like Authelia's own session
+const SESSION_COOKIE = 'mock_session'
 
 const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url')
 
@@ -128,14 +131,22 @@ export function startMockAuth(port: number) {
 
   // The login page: pick who to log in as, no password
   app.get('/api/oidc/authorization', c => {
-    const { redirect_uri, state, nonce, client_id } = c.req.query()
+    const { redirect_uri, state, nonce, client_id, prompt, scope } = c.req.query()
     if (!isLocalUrl(redirect_uri)) return c.text('redirect_uri must point to localhost', 400)
 
-    const callbackFor = (username: string) => {
+    const back = (params: Record<string, string>) => {
       const url = new URL(redirect_uri)
-      url.searchParams.set('code', encode({ username, nonce, client_id }))
+      for (const [name, value] of Object.entries(params)) url.searchParams.set(name, value)
       if (state) url.searchParams.set('state', state)
       return url.toString()
+    }
+    const callbackFor = (username: string) => back({ code: encode({ username, nonce, client_id, scope }) })
+
+    // A silent login can't show a page: like Authelia, it logs in whoever is still logged in
+    // here, or answers login_required
+    if (prompt === 'none') {
+      const username = getCookie(c, SESSION_COOKIE)
+      return c.redirect(username && users.has(username) ? callbackFor(username) : back({ error: 'login_required' }))
     }
 
     return c.html(
@@ -145,7 +156,7 @@ export function startMockAuth(port: number) {
           <p>Lokal utvikling. Velg hvem du vil logge inn som.</p>
           ${[...users].map(
             ([username, user]) =>
-              html`<a class="user" href="${callbackFor(username)}">
+              html`<a class="user" href="/login/${username}?next=${encodeURIComponent(callbackFor(username))}">
                 ${user.displayName}
                 <small>${username} · ${user.groups.join(', ')}</small>
               </a>`,
@@ -154,15 +165,26 @@ export function startMockAuth(port: number) {
     )
   })
 
+  // Picking a user starts a session here, so a silent login later finds them
+  app.get('/login/:username', c => {
+    const username = c.req.param('username')
+    const next = c.req.query('next')
+    if (!users.has(username) || !isLocalUrl(next)) return c.text('unknown user, or next is not on localhost', 400)
+    setCookie(c, SESSION_COOKIE, username, { path: '/', httpOnly: true, sameSite: 'Lax' })
+    return c.redirect(next)
+  })
+
   app.post('/api/oidc/token', async c => {
     const form = await c.req.parseBody()
     let username: string | undefined
     let nonce: string | undefined
     let clientId: string | undefined
+    // As with Authelia, a refresh token only comes with offline_access
+    let scope = 'openid profile email groups offline_access'
 
     if (form.grant_type === 'authorization_code' && typeof form.code === 'string') {
       try {
-        ;({ username, nonce, client_id: clientId } = JSON.parse(Buffer.from(form.code, 'base64url').toString()))
+        ;({ username, nonce, client_id: clientId, scope = scope } = JSON.parse(Buffer.from(form.code, 'base64url').toString()))
       } catch {
         // Falls through to invalid_grant
       }
@@ -174,10 +196,10 @@ export function startMockAuth(port: number) {
     const now = Math.floor(Date.now() / 1000)
     return c.json({
       access_token: ACCESS_PREFIX + username,
-      refresh_token: REFRESH_PREFIX + username,
+      ...(scope.split(' ').includes('offline_access') && { refresh_token: REFRESH_PREFIX + username }),
       token_type: 'Bearer',
       expires_in: TOKEN_LIFETIME_SECONDS,
-      scope: 'openid profile email groups offline_access',
+      scope,
       id_token: unsignedJwt({
         iss: issuer,
         sub: username,
@@ -207,6 +229,7 @@ export function startMockAuth(port: number) {
 
   // Authelia's portal pages that the site links to
   app.get('/logout', c => {
+    deleteCookie(c, SESSION_COOKIE, { path: '/' })
     const rd = c.req.query('rd')
     return isLocalUrl(rd) ? c.redirect(rd) : c.html(page('Logget ut', html`<h1>Logget ut</h1>`))
   })
