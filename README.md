@@ -134,6 +134,7 @@ paid back out again.
 | POST | `/bet/flaks/:game/buy` | Buy a ticket; its outcome is drawn now |
 | POST | `/bet/flaks/tickets/:id/scratch` | Scratch `{ field }`, or `{}` for every field left; the last one pays the prize |
 | POST | `/bet/casino/roulette/spin` | Roulette: `{ bets: [{ type, number?, stake }] }`, settled at once |
+| GET | `/bet/flaks/spins` | Own roulette spins |
 
 `kind` is `yesno`, `choice`, `multi` or `overunder`. A multi market also takes `winners`,
 about how many of its outcomes will come true (at least 1, fewer than the outcomes, like
@@ -186,7 +187,8 @@ scratch cards and roulette. A scratch card's prize is drawn by its odds when it 
 a real one, and its fields are laid out to show it; they stay on the server until scratched. The
 cards follow Norsk Tipping's Flax cards of the same price (prices, top prizes and their odds,
 how often a ticket wins) and pay back 55-59 % of the stakes. Coins move through the ledger as
-`casino-stake` and `casino-payout`, with the game and what happened.
+`casino-stake` and `casino-payout`, with the game and what happened. Finished tickets and
+roulette spins are kept, so they show among the settled bets.
 
 ### Game scoreboards
 

@@ -48,6 +48,8 @@ import {
   ROULETTE_TYPES,
   scratch,
   spinRoulette,
+  spins,
+  spinsOfMember,
   type RouletteBet,
 } from './flaks.ts'
 import { idByName, usernameOf } from './members.ts'
@@ -380,6 +382,8 @@ betRoutes.post('/bet/flaks/tickets/:id/scratch', async c => {
   const ticket = scratch(viewer, id(c), field as number | undefined)
   return c.json({ ticket, account: await getAccount(viewer) })
 })
+// Own roulette spins
+betRoutes.get('/bet/flaks/spins', c => c.json(spins(viewerOf(c))))
 betRoutes.post('/bet/casino/roulette/spin', async c => {
   const viewer = viewerOf(c)
   const spin = spinRoulette(viewer, readRouletteBets(await readBody(c)))
@@ -388,9 +392,13 @@ betRoutes.post('/bet/casino/roulette/spin', async c => {
 betRoutes.get('/bet/ledger', c => c.json(listLedger(viewerOf(c))))
 betRoutes.get('/bet/leaderboard', async c => c.json(await getLeaderboard()))
 // Another member's page: their place, coins and slips (?status=open|settled)
-// With the scratch cards they have finished among the settled
+// With the scratch cards they have finished and their roulette spins among the settled
 betRoutes.get('/bet/members/:id', async c => {
   const settled = c.req.query('status') === 'settled'
   const page = await getMemberPage(id(c), settled)
-  return c.json({ ...page, tickets: settled ? doneTicketsOfMember(id(c)) : [] })
+  return c.json({
+    ...page,
+    tickets: settled ? doneTicketsOfMember(id(c)) : [],
+    spins: settled ? spinsOfMember(id(c)) : [],
+  })
 })

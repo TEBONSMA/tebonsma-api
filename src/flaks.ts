@@ -28,6 +28,18 @@ db.exec(`
     done_at    TEXT
   );
   CREATE INDEX IF NOT EXISTS flaks_tickets_member ON flaks_tickets (username, status, created_at);
+
+  CREATE TABLE IF NOT EXISTS flaks_spins (
+    id         TEXT PRIMARY KEY,
+    username   TEXT NOT NULL,
+    number     INTEGER NOT NULL,
+    -- Every bet and what it paid (JSON)
+    bets       TEXT NOT NULL,
+    stake      INTEGER NOT NULL,
+    payout     INTEGER NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS flaks_spins_member ON flaks_spins (username, created_at);
 `)
 
 const bad = (message: string) => new HTTPException(400, { message })
@@ -235,6 +247,28 @@ function wins(bet: RouletteBet, n: number) {
   }
 }
 
+const colorOf = (n: number) => (n === 0 ? ('green' as const) : RED.has(n) ? ('red' as const) : ('black' as const))
+
+interface SpinRow {
+  id: string
+  username: string
+  number: number
+  bets: string
+  stake: number
+  payout: number
+  created_at: string
+}
+
+const toSpin = (row: SpinRow) => ({
+  id: row.id,
+  number: row.number,
+  color: colorOf(row.number),
+  bets: JSON.parse(row.bets) as (RouletteBet & { won: boolean; payout: number })[],
+  stake: row.stake,
+  payout: row.payout,
+  createdAt: row.created_at,
+})
+
 export function spinRoulette(viewer: Viewer, bets: RouletteBet[]) {
   return transaction(() => {
     const total = bets.reduce((sum, bet) => sum + bet.stake, 0)
@@ -247,6 +281,34 @@ export function spinRoulette(viewer: Viewer, bets: RouletteBet[]) {
     const paid = results.reduce((sum, bet) => sum + bet.payout, 0)
     addCasinoRow(viewer.username, -total, 'Rulett', `${bets.length} ${bets.length === 1 ? 'innsats' : 'innsatser'}`)
     if (paid > 0) addCasinoRow(viewer.username, paid, 'Rulett', `Kula landet på ${number}`)
-    return { number, color: number === 0 ? ('green' as const) : RED.has(number) ? ('red' as const) : ('black' as const), bets: results }
+    // Kept so the spin shows among the settled bets
+    const row: SpinRow = {
+      id: randomUUID(),
+      username: viewer.username,
+      number,
+      bets: JSON.stringify(results),
+      stake: total,
+      payout: paid,
+      created_at: now(),
+    }
+    db.prepare(
+      'INSERT INTO flaks_spins (id, username, number, bets, stake, payout, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    ).run(row.id, row.username, row.number, row.bets, row.stake, row.payout, row.created_at)
+    return toSpin(row)
   })
+}
+
+// Spins, the latest first: a member's own, or another's by public id
+const spinsOf = (username: string) =>
+  (
+    db
+      .prepare('SELECT * FROM flaks_spins WHERE username = ? ORDER BY created_at DESC LIMIT ?')
+      .all(username, DONE_SHOWN) as unknown as SpinRow[]
+  ).map(toSpin)
+
+export const spins = (viewer: Viewer) => spinsOf(viewer.username)
+
+export function spinsOfMember(id: string) {
+  const username = usernameOf(id)
+  return username ? spinsOf(username) : []
 }
