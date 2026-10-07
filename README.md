@@ -122,6 +122,8 @@ can get a new closing time.
 | GET | `/bet/groups` | Every group with its markets, and `front`: where admins have put events and groups on the front page (`event:<id>`, `group:<id>`) |
 | GET | `/bet/groups/:id` | One group, its markets and the latest bets (`/bet/other` is "Andre spill", for the site before groups) |
 | POST, PATCH, DELETE | `/bet/groups`, `/bet/groups/:id` | Make a group (`{ title }`, its id comes from the title), rename it, or delete one that has never had markets and no bot fills (admins) |
+| GET | `/tebbet/groups/:id/image` | A group's picture for its tile, open to anyone like a profile picture; its address in `image` carries a `?v=` that changes with it |
+| PUT, DELETE | `/tebbet/groups/:id/image` | Put up a picture for a group (`{ image }`, base64 JPEG up to 1 MB) or take it down (admins) |
 | PUT | `/bet/front` | The order of the front page from the top: `{ items: ['group:landslaget', 'event:<id>', …] }`. Events left out go by date among the other events, groups at the end |
 | GET | `/bet/members` | The members (`MEMBER_GROUP`), to keep out of a market or add as its outcomes |
 | POST | `/bet/events/:id/markets` | Open a market: `{ question, kind, outcomes: [{ label, odds }], closesAt, excluded }` |
@@ -136,10 +138,10 @@ can get a new closing time.
 | POST | `/bet/markets/:id/void` | Call it off and pay the stakes back |
 | POST | `/bet/markets/:id/reopen` | Take the decision back |
 | DELETE | `/bet/markets/:id` | Remove a market nobody has played on |
-| POST | `/bet/slips` | Play: `{ slips: [{ stake, selections }] }`, all or none. A selection is `{ outcomeId, odds }`, or `{ marketId, side, line, odds }` for over/under |
+| POST | `/bet/slips` | Play: `{ slips: [{ stake, selections }] }`, all or none. A selection is `{ outcomeId, odds }`, or `{ marketId, side, line, odds }` for over/under. A combination may also hold one place on the roulette table, `{ roulette: { type, number? }, odds }`: the wheel is spun as the slip is played, and a miss loses the slip at once |
 | GET | `/bet/slips?status=open\|settled` | Own slips |
 | GET | `/bet/ledger` | Own account statement |
-| GET | `/bet/activity` | Everything played and decided on TebBet, the newest first: every slip, every market decided or called off (with everyone who played on it: their pick, odds, whether it came true and what their slip won or lost), every scratch card scratched to the end. `?kind=slip`, `result` or `ticket` for one kind; `?before=` the `next` of the previous page for older |
+| GET | `/bet/activity` | Everything played and decided on TebBet, the newest first: every slip, every market decided or called off (with everyone who played on it: their pick, odds, whether it came true and what their slip won or lost), every scratch card scratched to the end, every roulette spin and every blackjack hand played out (free ones left out). `?kind=` one or more of `slip`, `result`, `ticket`, `spin` and `hand`, comma-separated; `?before=` the `next` of the previous page for older |
 | GET | `/bet/leaderboard` | Everyone who has played, by coins in hand plus coins in play. Equal totals share a `rank` (1, 1, 1, 4) |
 | GET | `/bet/members/:id?status=open\|settled` | A member's page: place on the leaderboard, coins and slips (not their account statement), and with `settled` the scratch cards they have finished |
 | GET | `/bet/flaks` | The scratch cards (price, prizes and odds, rules) and own tickets not scratched to the end |
@@ -148,6 +150,12 @@ can get a new closing time.
 | POST | `/bet/flaks/:game/try` | A free ticket to try the game, with every field at once; nothing is kept, taken or paid |
 | POST | `/bet/flaks/tickets/:id/scratch` | Scratch `{ field }`, or `{}` for every field left; the last one pays the prize |
 | POST | `/bet/casino/roulette/spin` | Roulette: `{ bets: [{ type, number?, stake }] }`, settled at once |
+| GET | `/bet/flaks/spins` | Own roulette spins |
+| POST | `/bet/casino/roulette/try` | A free spin with the same bets as `/spin`; nothing is kept, taken or paid |
+| GET | `/bet/casino/blackjack` | The blackjack hand being played, if any (`{ hand }`) |
+| POST | `/bet/casino/blackjack/deal` | Deal a hand: `{ bet, trial? }`. A free one (`trial: true`) takes and pays nothing |
+| POST | `/bet/casino/blackjack/:id/:action` | `hit`, `stand`, `double` or `split` the hand being played |
+| GET | `/bet/flaks/hands` | Own blackjack hands played to the end |
 
 `kind` is `yesno`, `choice`, `multi` or `overunder`. A multi market also takes `winners`,
 about how many of its outcomes will come true (at least 1, fewer than the outcomes, like
@@ -200,7 +208,14 @@ scratch cards and roulette. A scratch card's prize is drawn by its odds when it 
 a real one, and its fields are laid out to show it; they stay on the server until scratched. The
 cards follow Norsk Tipping's Flax cards of the same price (prices, top prizes and their odds,
 how often a ticket wins) and pay back 55-59 % of the stakes. Coins move through the ledger as
-`casino-stake` and `casino-payout`, with the game and what happened.
+`casino-stake` and `casino-payout`, with the game and what happened. Finished tickets and
+roulette spins are kept, so they show among the settled bets.
+
+Blackjack (`src/blackjack.ts`) is played against the dealer, one hand at a time, from an endlessly
+shuffled shoe kept on the server, so the hole card can't be peeked at. Blackjack pays 3:2 (rounded
+down), the dealer peeks for blackjack and stands on soft 17, any first two cards can be doubled,
+and a pair can be split once (split aces get one card each). With good play it pays back about
+99,5 % of the stakes.
 
 ### Game scoreboards
 

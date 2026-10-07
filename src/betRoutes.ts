@@ -3,6 +3,7 @@ import { bodyLimit } from 'hono/body-limit'
 import { HTTPException } from 'hono/http-exception'
 import { ACTIVITY_KINDS, listActivity, type ActivityKind } from './activity.ts'
 import { requireCaller, type Env } from './auth.ts'
+import { ACTIONS, act, deal, doneHands, doneHandsOfMember, openHand, type Action } from './blackjack.ts'
 import {
   closeMarket,
   createGroup,
@@ -20,25 +21,27 @@ import {
   getMemberPage,
   getSlips,
   inGroup,
+  type LayoutGroup,
   listEvents,
   listGroups,
   listLedger,
   listMembers,
   listSlips,
+  type MarketInput,
   onEvent,
   placeSlips,
+  readGroupImage,
   renameGroup,
   renameSection,
   reopenMarket,
   saveFront,
   saveLayout,
   sectionNamed,
+  setGroupImage,
   settleMarket,
+  type SlipInput,
   updateMarket,
   voidMarket,
-  type LayoutGroup,
-  type MarketInput,
-  type SlipInput,
 } from './bets.ts'
 import {
   buyTicket,
@@ -46,14 +49,16 @@ import {
   doneTicketsOfMember,
   listGames,
   openTickets,
-  ROULETTE_TYPES,
   scratch,
   tryTicket,
   spinRoulette,
-  type RouletteBet,
+  tryRoulette,
+  spins,
+  spinsOfMember,
 } from './flaks.ts'
 import { idByName, usernameOf } from './members.ts'
 import { MAX_ODDS, MIN_ODDS, SPREADS, type Spread } from './odds.ts'
+import { ROULETTE_TYPES, type RouletteBet, type RouletteSpot } from './roulette.ts'
 import { bad, readBody, readText, viewerOf } from './feedRoutes.ts'
 
 const MAX_QUESTION_LENGTH = 140
@@ -76,6 +81,28 @@ const MAX_HIGHEST = 100_000
 export const betRoutes = new Hono<Env>()
 
 betRoutes.use('/bet/*', requireCaller, bodyLimit({ maxSize: 32 * 1024 }))
+
+// A group's picture: anyone may fetch it, like a profile picture, and the ?v= in its address
+// changes with it. Admins put it up as JPEG (the site makes it smaller first) or take it down.
+const MAX_GROUP_IMAGE_BYTES = 1024 * 1024
+betRoutes.get('/tebbet/groups/:id/image', c => {
+  const image = readGroupImage(c.req.param('id'))
+  if (!image) throw new HTTPException(404, { message: 'Gruppen har ikke bilde' })
+  return c.body(Buffer.from(image), 200, {
+    'Content-Type': 'image/jpeg',
+    'X-Content-Type-Options': 'nosniff',
+    'Cache-Control': 'public, max-age=31536000, immutable',
+  })
+})
+betRoutes.put('/tebbet/groups/:id/image', requireCaller, bodyLimit({ maxSize: 2 * 1024 * 1024 }), async c => {
+  const { image } = await readBody(c)
+  if (typeof image !== 'string') throw bad('Mangler bilde')
+  const bytes = Buffer.from(image, 'base64')
+  if (!(bytes.length > 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff)) throw bad('Bildet må være JPEG')
+  if (bytes.length > MAX_GROUP_IMAGE_BYTES) throw new HTTPException(413, { message: 'Bildet er for stort' })
+  return c.json({ image: setGroupImage(viewerOf(c), c.req.param('id'), bytes) })
+})
+betRoutes.delete('/tebbet/groups/:id/image', requireCaller, c => c.json({ image: setGroupImage(viewerOf(c), c.req.param('id'), null) }))
 // Opens the account on the first visit and pays the Mondays owed since the last one
 betRoutes.use('/bet/*', async (c, next) => {
   ensureAccount(c.get('caller').username)
@@ -231,8 +258,10 @@ function readSlips(body: Record<string, unknown>): SlipInput[] {
     return {
       stake,
       selections: selections.map(selection => {
-        const { outcomeId, marketId, side, line, odds } = (selection ?? {}) as Record<string, unknown>
+        const { outcomeId, marketId, side, line, odds, roulette } = (selection ?? {}) as Record<string, unknown>
         if (typeof odds !== 'number') throw bad('Ugyldig kupong')
+        // A place on the roulette table, in a combination
+        if (roulette !== undefined) return { roulette: readSpot(roulette), odds }
         if (typeof outcomeId === 'string') return { outcomeId, odds }
         if (typeof marketId === 'string' && (side === 'over' || side === 'under') && typeof line === 'number') {
           return { marketId, side, line, odds }
@@ -244,21 +273,28 @@ function readSlips(body: Record<string, unknown>): SlipInput[] {
 }
 
 // [{ type, number?, stake }], as the roulette table sends them
+// A place on the roulette table: { type, number? }, the number for straight (0-36), dozen and
+// column (1-3)
+function readSpot(raw: unknown): RouletteSpot {
+  const { type, number } = (raw ?? {}) as Record<string, unknown>
+  if (typeof type !== 'string' || !ROULETTE_TYPES.includes(type as RouletteSpot['type'])) throw bad('Ugyldig innsats')
+  const highest = type === 'straight' ? 36 : type === 'dozen' || type === 'column' ? 3 : null
+  if (highest === null) return { type: type as RouletteSpot['type'] }
+  const lowest = type === 'straight' ? 0 : 1
+  if (typeof number !== 'number' || !Number.isInteger(number) || number < lowest || number > highest) throw bad('Ugyldig tall')
+  return { type: type as RouletteSpot['type'], number }
+}
+
 function readRouletteBets(body: Record<string, unknown>): RouletteBet[] {
   const { bets } = body
   if (!Array.isArray(bets) || bets.length === 0) throw bad('Legg på minst én innsats')
   if (bets.length > 50) throw bad('For mange innsatser')
   return bets.map(raw => {
-    const { type, number, stake } = (raw ?? {}) as Record<string, unknown>
-    if (typeof type !== 'string' || !ROULETTE_TYPES.includes(type as RouletteBet['type'])) throw bad('Ugyldig innsats')
+    const { stake } = (raw ?? {}) as Record<string, unknown>
     if (typeof stake !== 'number' || !Number.isInteger(stake) || stake < 1 || stake > MAX_STAKE) {
       throw bad('Innsatsen må være et helt antall mynter')
     }
-    const highest = type === 'straight' ? 36 : type === 'dozen' || type === 'column' ? 3 : null
-    if (highest === null) return { type: type as RouletteBet['type'], stake }
-    const lowest = type === 'straight' ? 0 : 1
-    if (typeof number !== 'number' || !Number.isInteger(number) || number < lowest || number > highest) throw bad('Ugyldig tall')
-    return { type: type as RouletteBet['type'], number, stake }
+    return { ...readSpot(raw), stake }
   })
 }
 
@@ -384,27 +420,51 @@ betRoutes.post('/bet/flaks/tickets/:id/scratch', async c => {
   const ticket = scratch(viewer, id(c), field as number | undefined)
   return c.json({ ticket, account: await getAccount(viewer) })
 })
+// Own roulette spins, and blackjack hands played to the end
+betRoutes.get('/bet/flaks/spins', c => c.json(spins(viewerOf(c))))
+betRoutes.get('/bet/flaks/hands', c => c.json(doneHands(viewerOf(c))))
+// Blackjack: the hand being played, if any; a new one ({ bet, trial? }); and the moves on it
+betRoutes.get('/bet/casino/blackjack', c => c.json({ hand: openHand(viewerOf(c)) }))
+betRoutes.post('/bet/casino/blackjack/deal', async c => {
+  const viewer = viewerOf(c)
+  const { bet, trial } = await readBody(c)
+  if (typeof bet !== 'number' || !Number.isInteger(bet) || bet < 1 || bet > MAX_STAKE) throw bad('Innsatsen må være et helt antall mynter')
+  return c.json({ hand: deal(viewer, bet, trial === true), account: await getAccount(viewer) }, 201)
+})
+betRoutes.post('/bet/casino/blackjack/:id/:action', async c => {
+  const action = c.req.param('action') ?? ''
+  if (!ACTIONS.includes(action as Action)) throw bad('Ugyldig trekk')
+  const viewer = viewerOf(c)
+  return c.json({ hand: act(viewer, id(c), action as Action), account: await getAccount(viewer) })
+})
+// A free spin with the same bets; no coins move and nothing is kept
+betRoutes.post('/bet/casino/roulette/try', async c => c.json(tryRoulette(readRouletteBets(await readBody(c)))))
 betRoutes.post('/bet/casino/roulette/spin', async c => {
   const viewer = viewerOf(c)
   const spin = spinRoulette(viewer, readRouletteBets(await readBody(c)))
   return c.json({ ...spin, account: await getAccount(viewer) })
 })
 betRoutes.get('/bet/ledger', c => c.json(listLedger(viewerOf(c))))
-// Everything played and decided on TebBet, the newest first: ?before=<next> for older, ?kind=slip,
-// result or ticket for one kind
+// Everything played and decided on TebBet, the newest first: ?before=<next> for older, ?kind= one
+// or more of slip, result, ticket, spin and hand, comma-separated
 betRoutes.get('/bet/activity', async c => {
   const before = c.req.query('before')
   if (before !== undefined && Number.isNaN(Date.parse(before))) throw bad('Ugyldig tidspunkt')
   const kind = c.req.query('kind')
-  if (kind !== undefined && !ACTIVITY_KINDS.includes(kind as ActivityKind)) throw bad('Ugyldig type')
-  const kinds = kind === undefined ? ACTIVITY_KINDS : [kind as ActivityKind]
+  const kinds = kind === undefined ? ACTIVITY_KINDS : (kind.split(',') as ActivityKind[])
+  if (kinds.some(k => !ACTIVITY_KINDS.includes(k))) throw bad('Ugyldig type')
   return c.json(await listActivity(viewerOf(c), before === undefined ? null : new Date(before).toISOString(), kinds))
 })
 betRoutes.get('/bet/leaderboard', async c => c.json(await getLeaderboard()))
 // Another member's page: their place, coins and slips (?status=open|settled)
-// With the scratch cards they have finished among the settled
+// With the scratch cards they have finished and their roulette spins among the settled
 betRoutes.get('/bet/members/:id', async c => {
   const settled = c.req.query('status') === 'settled'
   const page = await getMemberPage(viewerOf(c), id(c), settled)
-  return c.json({ ...page, tickets: settled ? doneTicketsOfMember(id(c)) : [] })
+  return c.json({
+    ...page,
+    tickets: settled ? doneTicketsOfMember(id(c)) : [],
+    spins: settled ? spinsOfMember(id(c)) : [],
+    hands: settled ? doneHandsOfMember(id(c)) : [],
+  })
 })

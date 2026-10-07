@@ -1,18 +1,20 @@
 import { hiddenFor, labelOf, resultOf, toOdds, toSlips, type LegResultRow, type SelectionResult, type SlipRow } from './bets.ts'
+import { handsBefore } from './blackjack.ts'
 import { BOT } from './bots/bot.ts'
 import { db } from './db.ts'
 import type { Viewer } from './feed.ts'
-import { GAMES } from './flaksGames.ts'
+import { spinsBefore } from './flaks.ts'
+import { GAMES, type Field } from './flaksGames.ts'
 import { getMembers } from './members.ts'
 
 // Activity: everything that happens on TebBet in one log, the newest first. Every slip played,
-// every market decided or called off, and every scratch card scratched to the end, a page at a
-// time. Everyone sees the same log; who played what is already shown on each event and group,
+// every market decided or called off, every scratch card scratched to the end, every roulette spin
+// and every blackjack hand played out (free ones left out), a page at a time. Everyone sees the same log; who played what is already shown on each event and group,
 // but not the odds on markets the viewer is kept out of.
 
 const PAGE = 50
 
-export const ACTIVITY_KINDS = ['slip', 'result', 'ticket'] as const
+export const ACTIVITY_KINDS = ['slip', 'result', 'ticket', 'spin', 'hand'] as const
 export type ActivityKind = (typeof ACTIVITY_KINDS)[number]
 
 interface ResultRow {
@@ -37,6 +39,8 @@ interface TicketRow {
   price: number
   prize: number
   done_at: string
+  // What every field held (JSON); a ticket here is scratched to the end
+  board: string
 }
 
 // A pick on a decided market, with the slip it is on
@@ -68,7 +72,8 @@ function playersOn(marketIds: string[]) {
     .prepare(
       `SELECT s.market_id, s.slip_id, s.outcome_id, s.side, s.line, s.odds, o.label, o.won, m.status, m.result_value,
          sl.username, sl.stake, sl.status AS slip_status, sl.payout, sl.odds AS slip_odds,
-         (SELECT COUNT(*) FROM bet_selections x WHERE x.slip_id = s.slip_id) AS legs,
+         (SELECT COUNT(*) FROM bet_selections x WHERE x.slip_id = s.slip_id)
+           + (SELECT COUNT(*) FROM bet_roulette_legs r WHERE r.slip_id = s.slip_id) AS legs,
          (SELECT COUNT(*) FROM bet_selections x JOIN bet_markets xm ON xm.id = x.market_id
           WHERE x.slip_id = s.slip_id AND xm.status = 'void') AS voided
        FROM bet_selections s
@@ -153,11 +158,14 @@ export async function listActivity(viewer: Viewer, before: string | null, kinds:
   const tickets = kinds.includes('ticket')
     ? (db
         .prepare(
-          `SELECT id, username, game, price, prize, done_at FROM flaks_tickets
+          `SELECT id, username, game, price, prize, done_at, board FROM flaks_tickets
            WHERE status = 'done' AND done_at < ? ORDER BY done_at DESC LIMIT ?`,
         )
         .all(until, PAGE) as unknown as TicketRow[])
     : []
+
+  const spins = kinds.includes('spin') ? spinsBefore(until, PAGE) : []
+  const hands = kinds.includes('hand') ? handsBefore(until, PAGE) : []
 
   const winners = new Map<string, string[]>()
   if (results.length > 0) {
@@ -174,7 +182,14 @@ export async function listActivity(viewer: Viewer, before: string | null, kinds:
   const players = playersOn(results.map(row => row.id))
   const deciders = results.map(row => row.settled_by).filter((name): name is string => !!name && name !== BOT.username)
   const bettors = [...players.values()].flat().map(picks => picks[0].username)
-  const members = await getMembers([...slips.map(row => row.username), ...tickets.map(row => row.username), ...deciders, ...bettors])
+  const members = await getMembers([
+    ...slips.map(row => row.username),
+    ...tickets.map(row => row.username),
+    ...spins.map(row => row.username),
+    ...hands.map(row => row.username),
+    ...deciders,
+    ...bettors,
+  ])
   const slipsById = new Map(toSlips(slips, hidden).map(slip => [slip.id, slip]))
 
   const items = [
@@ -215,11 +230,27 @@ export async function listActivity(viewer: Viewer, before: string | null, kinds:
       gameName: GAMES.find(game => game.id === row.game)?.name ?? row.game,
       price: row.price,
       prize: row.prize,
+      // Every field, as the ticket was scratched
+      fields: JSON.parse(row.board) as Field[],
+    })),
+    ...spins.map(({ username, spin }) => ({
+      kind: 'spin' as const,
+      id: `spin:${spin.id}`,
+      at: spin.createdAt,
+      member: members.get(username)!,
+      spin,
+    })),
+    ...hands.map(({ username, hand }) => ({
+      kind: 'hand' as const,
+      id: `hand:${hand.id}`,
+      at: hand.doneAt ?? hand.createdAt,
+      member: members.get(username)!,
+      hand,
     })),
   ].sort((a, b) => b.at.localeCompare(a.at))
 
   const page = items.slice(0, PAGE)
-  const more = items.length > PAGE || [slips, results, tickets].some(rows => rows.length === PAGE)
+  const more = items.length > PAGE || [slips, results, tickets, spins, hands].some(rows => rows.length === PAGE)
   // Ask with before = next for the page after this one
   return { items: page, next: more && page.length > 0 ? page[page.length - 1].at : null }
 }

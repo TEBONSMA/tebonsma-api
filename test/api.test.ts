@@ -387,4 +387,125 @@ describe('TebBet', () => {
     assert.equal((await call('GET', '/bet/flaks', 'ola')).data.tickets.length, 0, 'nothing is kept')
     assert.equal((await call('POST', '/bet/flaks/finnes-ikke/try', 'ola')).status, 404)
   })
+
+  it('plays blackjack, with coins in and out of the ledger', async () => {
+    const balance = async () => (await call('GET', '/bet/me', 'kari')).data.balance
+    for (let round = 0; round < 5; round++) {
+      const before = await balance()
+      const dealt = await call('POST', '/bet/casino/blackjack/deal', 'kari', { bet: 20 })
+      assert.equal(dealt.status, 201, JSON.stringify(dealt.data))
+      let hand = dealt.data.hand
+      if (hand.status === 'playing') {
+        assert.equal(hand.dealer.cards[1], null, 'the hole card stays hidden')
+        assert.equal((await call('POST', '/bet/casino/blackjack/deal', 'kari', { bet: 20 })).status, 409, 'one hand at a time')
+        assert.equal((await call('POST', `/bet/casino/blackjack/${hand.id}/fly`, 'kari')).status, 400)
+        hand = (await call('POST', `/bet/casino/blackjack/${hand.id}/stand`, 'kari')).data.hand
+      }
+      assert.equal(hand.status, 'done')
+      assert.ok(hand.dealer.cards.every((card: any) => card !== null), 'the hole card is shown at the end')
+      assert.equal(await balance(), before - hand.staked + hand.payout)
+    }
+    const played = await call('GET', '/bet/flaks/hands', 'kari')
+    assert.equal(played.data.length, 5)
+  })
+
+  it('logs roulette spins and blackjack hands, but not free ones', async () => {
+    assert.equal((await call('POST', '/bet/casino/roulette/spin', 'kari', { bets: [{ type: 'black', stake: 10 }] })).status, 200)
+    const log = await call('GET', '/bet/activity?kind=spin,hand', 'ola')
+    assert.equal(log.status, 200)
+    assert.ok(log.data.items.every((item: any) => item.kind === 'spin' || item.kind === 'hand'))
+    assert.equal(log.data.items.filter((item: any) => item.kind === 'spin').length, 1)
+    assert.ok(log.data.items.filter((item: any) => item.kind === 'hand').every((item: any) => !item.hand.trial))
+    assert.equal((await call('GET', '/bet/activity?kind=spin,nope', 'ola')).status, 400)
+  })
+
+  it('logs scratch cards with every field', async () => {
+    const bought = await call('POST', '/bet/flaks/underbergen/buy', 'kari')
+    assert.equal(bought.status, 201, JSON.stringify(bought.data))
+    const scratched = await call('POST', `/bet/flaks/tickets/${bought.data.ticket.id}/scratch`, 'kari', {})
+    assert.equal(scratched.data.ticket.done, true)
+    const [logged] = (await call('GET', '/bet/activity?kind=ticket', 'ola')).data.items
+    assert.equal(logged.id, `ticket:${bought.data.ticket.id}`)
+    assert.deepEqual(logged.fields, scratched.data.ticket.fields)
+  })
+
+  it('lets admins put up a picture for a group', async () => {
+    const group = (await call('POST', '/bet/groups', 'admin', { title: 'Med bilde' })).data
+    assert.equal(group.image, null)
+    // The start of a JPEG is all the API checks
+    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 4]).toString('base64')
+    assert.equal((await call('PUT', `/tebbet/groups/${group.id}/image`, 'ola', { image: jpeg })).status, 403)
+    assert.equal((await call('PUT', `/tebbet/groups/${group.id}/image`, 'admin', { image: Buffer.from('not a jpeg').toString('base64') })).status, 400)
+    const put = await call('PUT', `/tebbet/groups/${group.id}/image`, 'admin', { image: jpeg })
+    assert.equal(put.status, 200, JSON.stringify(put.data))
+    const listed = (await call('GET', `/bet/groups/${group.id}`, 'ola')).data
+    assert.equal(listed.image, put.data.image)
+    const picture = await fetch(API + put.data.image)
+    assert.equal(picture.status, 200, 'anyone may fetch it')
+    assert.equal(picture.headers.get('content-type'), 'image/jpeg')
+    assert.equal((await call('DELETE', `/tebbet/groups/${group.id}/image`, 'admin')).data.image, null)
+    assert.equal((await fetch(API + `/tebbet/groups/${group.id}/image`)).status, 404)
+  })
+
+  it('plays a combination with a roulette pick, spun at once', async () => {
+    const group = (await call('POST', '/bet/groups', 'admin', { title: 'Rulettkombo' })).data
+    const market = (
+      await call('POST', `/bet/groups/${group.id}/markets`, 'admin', {
+        question: 'Blir det fest?',
+        kind: 'yesno',
+        outcomes: [{ label: 'Ja', odds: 2 }, { label: 'Nei', odds: 2 }],
+        excluded: [],
+      })
+    ).data
+    const red = { roulette: { type: 'red' }, odds: 2 }
+    const yes = async () => {
+      const outcome = (await call('GET', `/bet/groups/${group.id}`, 'kari')).data.markets[0].outcomes[0]
+      return { outcomeId: outcome.id, odds: outcome.odds }
+    }
+    const play = async (selections: unknown[]) => call('POST', '/bet/slips', 'kari', { slips: [{ stake: 10, selections }] })
+    assert.equal((await play([red])).status, 400, 'roulette alone')
+    assert.equal((await play([await yes(), red, red])).status, 400, 'two roulette picks')
+    assert.equal((await play([await yes(), { roulette: { type: 'red' }, odds: 3 }])).status, 400, 'wrong odds')
+
+    const played = []
+    for (let i = 0; i < 6; i++) {
+      const placed = await play([await yes(), red])
+      assert.equal(placed.status, 201, JSON.stringify(placed.data))
+      const [slip] = placed.data.slips
+      const spin = slip.selections.find((s: any) => s.roulette)
+      assert.equal(spin.label, 'Rødt')
+      assert.ok(spin.roulette.landed >= 0 && spin.roulette.landed <= 36)
+      // A miss loses the slip at once; a hit leaves it waiting on the market
+      assert.equal(slip.status, spin.result === 'won' ? 'open' : 'lost')
+      played.push(slip)
+    }
+
+    assert.equal((await call('POST', `/bet/markets/${market.id}/settle`, 'admin', { outcomeId: market.outcomes[0].id })).status, 200)
+    const settled = (await call('GET', '/bet/slips?status=settled', 'kari')).data
+    for (const slip of played.filter(s => s.status === 'open')) {
+      const after = settled.find((s: any) => s.id === slip.id)
+      assert.equal(after.status, 'won')
+      assert.equal(after.payout, Math.floor((10 * Math.round(slip.odds * 100)) / 100), 'the market and roulette odds together')
+    }
+  })
+
+  it('lets a member try blackjack for free', async () => {
+    const before = (await call('GET', '/bet/me', 'ola')).data.balance
+    let hand = (await call('POST', '/bet/casino/blackjack/deal', 'ola', { bet: 100, trial: true })).data.hand
+    assert.equal(hand.trial, true)
+    while (hand.status === 'playing') hand = (await call('POST', `/bet/casino/blackjack/${hand.id}/hit`, 'ola')).data.hand
+    assert.equal((await call('GET', '/bet/me', 'ola')).data.balance, before, 'no coins move')
+    assert.equal((await call('GET', '/bet/flaks/hands', 'ola')).data.length, 0, 'free hands are not listed')
+  })
+
+  it('lets a member try roulette for free', async () => {
+    const before = (await call('GET', '/bet/me', 'ola')).data.balance
+    const spin = await call('POST', '/bet/casino/roulette/try', 'ola', { bets: [{ type: 'red', stake: 100 }, { type: 'straight', number: 17, stake: 10 }] })
+    assert.equal(spin.status, 200, JSON.stringify(spin.data))
+    assert.ok(spin.data.number >= 0 && spin.data.number <= 36)
+    assert.equal(spin.data.stake, 110)
+    assert.equal(spin.data.bets.length, 2)
+    assert.equal((await call('GET', '/bet/me', 'ola')).data.balance, before, 'no coins move')
+    assert.equal((await call('GET', '/bet/flaks/spins', 'ola')).data.length, 0, 'nothing is kept')
+  })
 })

@@ -4,6 +4,7 @@ import { addCasinoRow, balanceOf } from './bets.ts'
 import { db, transaction } from './db.ts'
 import type { Viewer } from './feed.ts'
 import { GAMES, type Field, type ScratchGame } from './flaksGames.ts'
+import { colorOf, ROULETTE_ODDS, wins, type RouletteBet } from './roulette.ts'
 import { usernameOf } from './members.ts'
 
 // Flaks: games of pure luck that settle at once, scratch cards and roulette. Coins move through
@@ -28,6 +29,18 @@ db.exec(`
     done_at    TEXT
   );
   CREATE INDEX IF NOT EXISTS flaks_tickets_member ON flaks_tickets (username, status, created_at);
+
+  CREATE TABLE IF NOT EXISTS flaks_spins (
+    id         TEXT PRIMARY KEY,
+    username   TEXT NOT NULL,
+    number     INTEGER NOT NULL,
+    -- Every bet and what it paid (JSON)
+    bets       TEXT NOT NULL,
+    stake      INTEGER NOT NULL,
+    payout     INTEGER NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS flaks_spins_member ON flaks_spins (username, created_at);
 `)
 
 const bad = (message: string) => new HTTPException(400, { message })
@@ -196,65 +209,87 @@ export function scratch(viewer: Viewer, id: string, field?: number) {
   })
 }
 
-// --- Roulette: a European wheel with one zero. Bets pay their odds with the stake included.
+// --- Roulette, with the rules in roulette.ts
 
-export type RouletteBetType = 'straight' | 'red' | 'black' | 'odd' | 'even' | 'low' | 'high' | 'dozen' | 'column'
-export interface RouletteBet {
-  type: RouletteBetType
-  // straight 0-36, dozen and column 1-3
-  number?: number
+
+interface SpinRow {
+  id: string
+  username: string
+  number: number
+  bets: string
   stake: number
+  payout: number
+  created_at: string
 }
 
-const RED = new Set([1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36])
-const ROULETTE_ODDS: Record<RouletteBetType, number> = {
-  straight: 36,
-  red: 2,
-  black: 2,
-  odd: 2,
-  even: 2,
-  low: 2,
-  high: 2,
-  dozen: 3,
-  column: 3,
-}
-export const ROULETTE_TYPES = Object.keys(ROULETTE_ODDS) as RouletteBetType[]
+const toSpin = (row: SpinRow) => ({
+  id: row.id,
+  number: row.number,
+  color: colorOf(row.number),
+  bets: JSON.parse(row.bets) as (RouletteBet & { won: boolean; payout: number })[],
+  stake: row.stake,
+  payout: row.payout,
+  createdAt: row.created_at,
+})
 
-function wins(bet: RouletteBet, n: number) {
-  if (bet.type === 'straight') return n === bet.number
-  if (n === 0) return false
-  switch (bet.type) {
-    case 'red':
-      return RED.has(n)
-    case 'black':
-      return !RED.has(n)
-    case 'odd':
-      return n % 2 === 1
-    case 'even':
-      return n % 2 === 0
-    case 'low':
-      return n <= 18
-    case 'high':
-      return n >= 19
-    case 'dozen':
-      return Math.ceil(n / 12) === bet.number
-    case 'column':
-      return ((n - 1) % 3) + 1 === bet.number
-  }
+// Where the ball lands, and what every bet pays there
+function roll(bets: RouletteBet[]) {
+  const number = randomInt(37)
+  const results = bets.map(bet => {
+    const won = wins(bet, number)
+    return { ...bet, won, payout: won ? bet.stake * ROULETTE_ODDS[bet.type] : 0 }
+  })
+  const total = bets.reduce((sum, bet) => sum + bet.stake, 0)
+  const paid = results.reduce((sum, bet) => sum + bet.payout, 0)
+  return { number, results, total, paid }
+}
+
+// A free spin to try the game: the same wheel, but nothing is kept, taken or paid
+export function tryRoulette(bets: RouletteBet[]) {
+  const { number, results, total, paid } = roll(bets)
+  return toSpin({ id: randomUUID(), username: '', number, bets: JSON.stringify(results), stake: total, payout: paid, created_at: now() })
 }
 
 export function spinRoulette(viewer: Viewer, bets: RouletteBet[]) {
   return transaction(() => {
-    const total = bets.reduce((sum, bet) => sum + bet.stake, 0)
+    const { number, results, total, paid } = roll(bets)
     if (total > balanceOf(viewer.username)) throw bad('Du har ikke nok TEB-mynter')
-    const number = randomInt(37)
-    const results = bets.map(bet => {
-      const won = wins(bet, number)
-      return { ...bet, won, payout: won ? bet.stake * ROULETTE_ODDS[bet.type] : 0 }
-    })
-    const paid = results.reduce((sum, bet) => sum + bet.payout, 0)
     addCasinoRow(viewer.username, -total, 'Rulett', `${bets.length} ${bets.length === 1 ? 'innsats' : 'innsatser'}`)
     if (paid > 0) addCasinoRow(viewer.username, paid, 'Rulett', `Kula landet på ${number}`)
-    return { number, color: number === 0 ? ('green' as const) : RED.has(number) ? ('red' as const) : ('black' as const), bets: results }
+    // Kept so the spin shows among the settled bets
+    const row: SpinRow = {
+      id: randomUUID(),
+      username: viewer.username,
+      number,
+      bets: JSON.stringify(results),
+      stake: total,
+      payout: paid,
+      created_at: now(),
+    }
+    db.prepare(
+      'INSERT INTO flaks_spins (id, username, number, bets, stake, payout, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    ).run(row.id, row.username, row.number, row.bets, row.stake, row.payout, row.created_at)
+    return toSpin(row)
   })
+}
+
+// Everyone's spins before a time, the latest first, for the activity log
+export const spinsBefore = (until: string, limit: number) =>
+  (
+    db.prepare('SELECT * FROM flaks_spins WHERE created_at < ? ORDER BY created_at DESC LIMIT ?').all(until, limit) as unknown as SpinRow[]
+  ).map(row => ({ username: row.username, spin: toSpin(row) }))
+
+// Spins, the latest first: a member's own, or another's by public id
+const spinsOf = (username: string) =>
+  (
+    db
+      .prepare('SELECT * FROM flaks_spins WHERE username = ? ORDER BY created_at DESC LIMIT ?')
+      .all(username, DONE_SHOWN) as unknown as SpinRow[]
+  ).map(toSpin)
+
+export const spins = (viewer: Viewer) => spinsOf(viewer.username)
+
+export function spinsOfMember(id: string) {
+  const username = usernameOf(id)
+  return username ? spinsOf(username) : []
 }
