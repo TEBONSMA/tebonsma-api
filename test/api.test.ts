@@ -295,4 +295,40 @@ describe('TebBet', () => {
     assert.equal(me.status, 200)
     assert.equal(me.data.balance, 1000)
   })
+
+  it('stops counting a combination once it is lost, and logs the bet and the result', async () => {
+    const group = await call('POST', '/bet/groups', 'admin', { title: 'Været' })
+    assert.equal(group.status, 201, JSON.stringify(group.data))
+    const market = async (question: string) => {
+      const created = await call('POST', `/bet/groups/${group.data.id}/markets`, 'admin', {
+        question,
+        kind: 'yesno',
+        outcomes: [{ label: 'Ja', odds: 2 }, { label: 'Nei', odds: 2 }],
+        excluded: [],
+      })
+      assert.equal(created.status, 201, JSON.stringify(created.data))
+      return created.data
+    }
+    const rain = await market('Regner det i morgen?')
+    const snow = await market('Snør det i morgen?')
+    const yes = (m: any) => ({ outcomeId: m.outcomes[0].id, odds: m.outcomes[0].odds })
+    const played = await call('POST', '/bet/slips', 'dev', { slips: [{ stake: 100, selections: [yes(rain), yes(snow)] }] })
+    assert.equal(played.status, 201, JSON.stringify(played.data))
+
+    const settled = await call('POST', `/bet/markets/${rain.id}/settle`, 'admin', { outcomeId: rain.outcomes[1].id })
+    assert.equal(settled.status, 200, JSON.stringify(settled.data))
+    const after = await call('GET', `/bet/groups/${group.data.id}`, 'dev')
+    assert.deepEqual(after.data.markets.find((m: any) => m.id === snow.id).mine, {}, 'nothing rides on snow once rain lost')
+
+    const log = await call('GET', '/bet/activity', 'kari')
+    assert.equal(log.status, 200)
+    assert.equal(log.data.items[0].kind, 'result')
+    assert.equal(log.data.items[0].answer, 'Nei')
+    const slip = log.data.items.find((item: any) => item.kind === 'slip')
+    assert.equal(slip.slip.selections.length, 2)
+    assert.equal(slip.slip.status, 'lost')
+    const results = await call('GET', '/bet/activity?kind=result', 'kari')
+    assert.ok(results.data.items.every((item: any) => item.kind === 'result'))
+    assert.equal((await call('GET', '/bet/activity?kind=nope', 'kari')).status, 400)
+  })
 })

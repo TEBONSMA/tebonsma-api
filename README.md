@@ -138,6 +138,7 @@ can get a new closing time.
 | POST | `/bet/slips` | Play: `{ slips: [{ stake, selections }] }`, all or none. A selection is `{ outcomeId, odds }`, or `{ marketId, side, line, odds }` for over/under |
 | GET | `/bet/slips?status=open\|settled` | Own slips |
 | GET | `/bet/ledger` | Own account statement |
+| GET | `/bet/activity` | Everything played and decided on TebBet, the newest first: every slip, every market decided or called off, every scratch card scratched to the end. `?kind=slip`, `result` or `ticket` for one kind; `?before=` the `next` of the previous page for older |
 | GET | `/bet/leaderboard` | Everyone who has played, by coins in hand plus coins in play. Equal totals share a `rank` (1, 1, 1, 4) |
 | GET | `/bet/members/:id?status=open\|settled` | A member's page: place on the leaderboard, coins and slips (not their account statement), and with `settled` the scratch cards they have finished |
 | GET | `/bet/flaks` | The scratch cards (price, prizes and odds, rules) and own tickets not scratched to the end |

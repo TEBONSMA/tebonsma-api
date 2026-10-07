@@ -552,10 +552,12 @@ function toMarket(market: MarketRow, viewer: Viewer) {
   const outcomes = outcomesOf(market.id)
   const rule = market.rule ? (JSON.parse(market.rule) as Rule) : null
   const current = pricesOf(market, outcomes)
+  // What the viewer still has riding on it: a combination already lost on another market, or
+  // a slip already paid or called off, no longer counts
   const mine = db
     .prepare(
       `SELECT s.outcome_id, s.side, s.line, SUM(sl.stake) AS stake FROM bet_selections s JOIN bet_slips sl ON sl.id = s.slip_id
-       WHERE s.market_id = ? AND sl.username = ? GROUP BY s.outcome_id, s.side, s.line`,
+       WHERE s.market_id = ? AND sl.username = ? AND sl.status = 'open' GROUP BY s.outcome_id, s.side, s.line`,
     )
     .all(market.id, viewer.username) as { outcome_id: string | null; side: Side | null; line: number | null; stake: number }[]
   const totals = db
@@ -1392,7 +1394,7 @@ export function placeSlips(viewer: Viewer, slips: SlipInput[]) {
   })
 }
 
-interface SlipRow {
+export interface SlipRow {
   id: string
   stake: number
   odds: number
@@ -1435,7 +1437,7 @@ function legsOf(slipIds: string[]) {
     .all(...slipIds) as unknown as LegRow[]
 }
 
-function toSlips(rows: SlipRow[]) {
+export function toSlips(rows: SlipRow[]) {
   const legs = legsOf(rows.map(row => row.id))
   return rows.map(row => ({
     id: row.id,
