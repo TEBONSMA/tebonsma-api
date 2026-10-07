@@ -50,6 +50,7 @@ import {
   scratch,
   tryTicket,
   spinRoulette,
+  tryRoulette,
   spins,
   spinsOfMember,
   type RouletteBet,
@@ -388,6 +389,8 @@ betRoutes.post('/bet/flaks/tickets/:id/scratch', async c => {
 })
 // Own roulette spins
 betRoutes.get('/bet/flaks/spins', c => c.json(spins(viewerOf(c))))
+// A free spin with the same bets; no coins move and nothing is kept
+betRoutes.post('/bet/casino/roulette/try', async c => c.json(tryRoulette(readRouletteBets(await readBody(c)))))
 betRoutes.post('/bet/casino/roulette/spin', async c => {
   const viewer = viewerOf(c)
   const spin = spinRoulette(viewer, readRouletteBets(await readBody(c)))

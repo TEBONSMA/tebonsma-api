@@ -277,16 +277,28 @@ const toSpin = (row: SpinRow) => ({
   createdAt: row.created_at,
 })
 
+// Where the ball lands, and what every bet pays there
+function roll(bets: RouletteBet[]) {
+  const number = randomInt(37)
+  const results = bets.map(bet => {
+    const won = wins(bet, number)
+    return { ...bet, won, payout: won ? bet.stake * ROULETTE_ODDS[bet.type] : 0 }
+  })
+  const total = bets.reduce((sum, bet) => sum + bet.stake, 0)
+  const paid = results.reduce((sum, bet) => sum + bet.payout, 0)
+  return { number, results, total, paid }
+}
+
+// A free spin to try the game: the same wheel, but nothing is kept, taken or paid
+export function tryRoulette(bets: RouletteBet[]) {
+  const { number, results, total, paid } = roll(bets)
+  return toSpin({ id: randomUUID(), username: '', number, bets: JSON.stringify(results), stake: total, payout: paid, created_at: now() })
+}
+
 export function spinRoulette(viewer: Viewer, bets: RouletteBet[]) {
   return transaction(() => {
-    const total = bets.reduce((sum, bet) => sum + bet.stake, 0)
+    const { number, results, total, paid } = roll(bets)
     if (total > balanceOf(viewer.username)) throw bad('Du har ikke nok TEB-mynter')
-    const number = randomInt(37)
-    const results = bets.map(bet => {
-      const won = wins(bet, number)
-      return { ...bet, won, payout: won ? bet.stake * ROULETTE_ODDS[bet.type] : 0 }
-    })
-    const paid = results.reduce((sum, bet) => sum + bet.payout, 0)
     addCasinoRow(viewer.username, -total, 'Rulett', `${bets.length} ${bets.length === 1 ? 'innsats' : 'innsatser'}`)
     if (paid > 0) addCasinoRow(viewer.username, paid, 'Rulett', `Kula landet på ${number}`)
     // Kept so the spin shows among the settled bets

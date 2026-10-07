@@ -387,4 +387,15 @@ describe('TebBet', () => {
     assert.equal((await call('GET', '/bet/flaks', 'ola')).data.tickets.length, 0, 'nothing is kept')
     assert.equal((await call('POST', '/bet/flaks/finnes-ikke/try', 'ola')).status, 404)
   })
+
+  it('lets a member try roulette for free', async () => {
+    const before = (await call('GET', '/bet/me', 'ola')).data.balance
+    const spin = await call('POST', '/bet/casino/roulette/try', 'ola', { bets: [{ type: 'red', stake: 100 }, { type: 'straight', number: 17, stake: 10 }] })
+    assert.equal(spin.status, 200, JSON.stringify(spin.data))
+    assert.ok(spin.data.number >= 0 && spin.data.number <= 36)
+    assert.equal(spin.data.stake, 110)
+    assert.equal(spin.data.bets.length, 2)
+    assert.equal((await call('GET', '/bet/me', 'ola')).data.balance, before, 'no coins move')
+    assert.equal((await call('GET', '/bet/flaks/spins', 'ola')).data.length, 0, 'nothing is kept')
+  })
 })

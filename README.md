@@ -149,6 +149,7 @@ can get a new closing time.
 | POST | `/bet/flaks/tickets/:id/scratch` | Scratch `{ field }`, or `{}` for every field left; the last one pays the prize |
 | POST | `/bet/casino/roulette/spin` | Roulette: `{ bets: [{ type, number?, stake }] }`, settled at once |
 | GET | `/bet/flaks/spins` | Own roulette spins |
+| POST | `/bet/casino/roulette/try` | A free spin with the same bets as `/spin`; nothing is kept, taken or paid |
 
 `kind` is `yesno`, `choice`, `multi` or `overunder`. A multi market also takes `winners`,
 about how many of its outcomes will come true (at least 1, fewer than the outcomes, like
