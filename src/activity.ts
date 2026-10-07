@@ -51,6 +51,8 @@ interface PickRow extends LegResultRow {
   payout: number
   slip_odds: number
   legs: number
+  // Picks on the slip whose market was called off, which count as odds 1,00
+  voided: number
 }
 
 const ORDER: Record<SelectionResult, number> = { won: 0, pending: 1, void: 2, lost: 3 }
@@ -66,7 +68,9 @@ function playersOn(marketIds: string[]) {
     .prepare(
       `SELECT s.market_id, s.slip_id, s.outcome_id, s.side, s.line, s.odds, o.label, o.won, m.status, m.result_value,
          sl.username, sl.stake, sl.status AS slip_status, sl.payout, sl.odds AS slip_odds,
-         (SELECT COUNT(*) FROM bet_selections x WHERE x.slip_id = s.slip_id) AS legs
+         (SELECT COUNT(*) FROM bet_selections x WHERE x.slip_id = s.slip_id) AS legs,
+         (SELECT COUNT(*) FROM bet_selections x JOIN bet_markets xm ON xm.id = x.market_id
+          WHERE x.slip_id = s.slip_id AND xm.status = 'void') AS voided
        FROM bet_selections s
        JOIN bet_slips sl ON sl.id = s.slip_id
        JOIN bet_markets m ON m.id = s.market_id
@@ -106,8 +110,10 @@ function toPlayer(picks: PickRow[], hidden: Set<string>) {
     stake: first.stake,
     // Whether the pick on this market came true
     result,
-    // Set when the slip is a combination: how many picks it has and its odds all told
-    combination: first.legs > picks.length ? { legs: first.legs, odds: secret ? null : toOdds(first.slip_odds) } : null,
+    // Set when the slip is a combination: how many picks it has, its odds all told, and how many
+    // of its markets were called off (each then counts as odds 1,00)
+    combination:
+      first.legs > picks.length ? { legs: first.legs, odds: secret ? null : toOdds(first.slip_odds), voided: first.voided } : null,
     slip: first.slip_status,
     gain: secret && gain !== null && gain > 0 ? null : gain,
   }

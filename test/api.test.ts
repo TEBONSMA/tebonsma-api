@@ -330,6 +330,7 @@ describe('TebBet', () => {
     assert.equal(player.result, 'lost')
     assert.equal(player.gain, -100)
     assert.equal(player.combination.legs, 2)
+    assert.equal(player.combination.voided, 0)
     const slip = log.data.items.find((item: any) => item.kind === 'slip')
     assert.equal(slip.slip.selections.length, 2)
     assert.equal(slip.slip.status, 'lost')
