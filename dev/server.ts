@@ -1,6 +1,7 @@
 import { rmSync } from 'node:fs'
 import { useBackend } from '../src/mail/backend.ts'
 import { mockMail } from './mock-mail.ts'
+import { mockPush } from './mock-push.ts'
 import { startMockAuth } from './mock-auth.ts'
 
 // Local development entry point (npm run dev:mock): starts the mock login provider and
@@ -36,6 +37,18 @@ if (!process.env.DATA_DIR) {
 
 // Mail lives in memory too, so no mail server is needed
 useBackend(mockMail)
+
+// Push: without keys of its own, each run gets a fresh pair so the sites can turn notifications
+// on, and pushes are printed instead of sent. With VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY set,
+// they really go out.
+if (!process.env.VAPID_PUBLIC_KEY) {
+  const { default: webpush } = await import('web-push')
+  const keys = webpush.generateVAPIDKeys()
+  process.env.VAPID_PUBLIC_KEY = keys.publicKey
+  process.env.VAPID_PRIVATE_KEY = keys.privateKey
+  const { usePushSender } = await import('../src/push.ts')
+  usePushSender(mockPush)
+}
 
 await import('../src/server.ts')
 

@@ -15,6 +15,8 @@ const ORIGIN = 'http://localhost:5173'
 
 let server: ChildProcess
 let dataDir: string
+// What the API pushed, as the mock push service prints it (dev/mock-push.ts)
+const pushes: { endpoint: string; title: string; body: string; url: string; tag?: string }[] = []
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
@@ -67,10 +69,17 @@ before(async () => {
       SITE_URL: ORIGIN,
       BOTS: 'off',
     },
-    stdio: ['ignore', 'ignore', 'pipe'],
+    stdio: ['ignore', 'pipe', 'pipe'],
   })
   let stderr = ''
   server.stderr?.on('data', chunk => (stderr += chunk))
+  let stdout = ''
+  server.stdout?.on('data', chunk => {
+    stdout += chunk
+    const lines = stdout.split('\n')
+    stdout = lines.pop()!
+    for (const line of lines) if (line.startsWith('[push] ')) pushes.push(JSON.parse(line.slice(7)))
+  })
 
   const health = await until(
     () => fetch(`${API}/health`).then(res => res.ok, () => false),
@@ -507,5 +516,87 @@ describe('TebBet', () => {
     assert.equal(spin.data.bets.length, 2)
     assert.equal((await call('GET', '/bet/me', 'ola')).data.balance, before, 'no coins move')
     assert.equal((await call('GET', '/bet/flaks/spins', 'ola')).data.length, 0, 'nothing is kept')
+  })
+})
+
+describe('push notifications', () => {
+  // What a browser hands over: an address at its push service and the keys to encrypt for it
+  const subscription = (name: string) => ({
+    endpoint: `https://fcm.googleapis.com/fcm/send/${name}`,
+    keys: { p256dh: 'B' + 'x'.repeat(86), auth: 'a'.repeat(22) },
+  })
+  const pushedTo = (name: string) => pushes.filter(push => push.endpoint.endsWith(`/${name}`))
+
+  it('takes subscriptions from members, for the push services only', async () => {
+    const key = await call('GET', '/push/key', null)
+    assert.equal(typeof key.data.publicKey, 'string')
+
+    const add = (user: string | null, body: unknown) => call('POST', '/push/subscriptions', user, body)
+    assert.equal((await add(null, { site: 'teb', subscription: subscription('nobody') })).status, 401)
+    assert.equal((await add('dev', { site: 'elsewhere', subscription: subscription('dev-x') })).status, 400)
+    const inside = { ...subscription('dev-x'), endpoint: 'https://lldap:17170/api/graphql' }
+    assert.equal((await add('dev', { site: 'teb', subscription: inside })).status, 400, 'never an address inside the network')
+    assert.equal((await add('dev', { site: 'teb', subscription: { ...subscription('dev-x'), endpoint: 'http://fcm.googleapis.com/x' } })).status, 400)
+
+    assert.equal((await add('dev', { site: 'teb', subscription: subscription('dev-teb') })).status, 204)
+    assert.equal((await add('dev', { site: 'tebbet', subscription: subscription('dev-bet') })).status, 204)
+    assert.equal((await add('kari', { site: 'teb', subscription: subscription('kari-teb') })).status, 204)
+  })
+
+  it('tells the author about a comment, and everyone else about a new event', async () => {
+    const post = await call('POST', '/feed/posts', 'dev', { body: 'Hvem blir med?', visibility: 'members', attachmentIds: [] })
+    await call('POST', `/feed/posts/${post.data.id}/comments`, 'kari', { body: 'Jeg!', parentId: null, attachmentIds: [] })
+    const [comment] = await until(async () => pushedTo('dev-teb'), list => list.length > 0, 5)
+    assert.equal(comment.title, 'Kari Nordmann kommenterte innlegget ditt')
+    assert.equal(comment.body, 'Jeg!')
+    assert.equal(comment.url, `/feed/${post.data.id}`)
+    assert.equal(pushedTo('kari-teb').length, 0, 'not to the one who commented')
+
+    const event = await call('POST', '/feed/posts', 'kari', {
+      body: 'Grilling i parken',
+      visibility: 'members',
+      attachmentIds: [],
+      event: { title: 'Grillfest', location: 'Parken', startsAt: '2030-06-01T16:00:00.000Z', endsAt: '2030-06-01T20:00:00.000Z' },
+    })
+    assert.equal(event.status, 201, JSON.stringify(event.data))
+    const announced = await until(async () => pushedTo('dev-teb'), list => list.length > 1, 5)
+    assert.equal(announced[1].title, 'Kari Nordmann publiserte et arrangement')
+    assert.equal(announced[1].body, 'Grillfest')
+    assert.equal(pushedTo('kari-teb').length, 0)
+    assert.equal(pushedTo('dev-bet').length, 0, 'TebBet only hears about TebBet')
+  })
+
+  it('tells a member on TebBet when their slip is decided', async () => {
+    const group = await call('POST', '/bet/groups', 'admin', { title: 'Push' })
+    const market = await call('POST', `/bet/groups/${group.data.id}/markets`, 'admin', {
+      question: 'Kommer varselet?',
+      kind: 'yesno',
+      outcomes: [{ label: 'Ja', odds: 2 }, { label: 'Nei', odds: 2 }],
+      excluded: [],
+    })
+    const yes = market.data.outcomes[0]
+    const played = await call('POST', '/bet/slips', 'dev', { slips: [{ stake: 100, selections: [{ outcomeId: yes.id, odds: yes.odds }] }] })
+    assert.equal(played.status, 201, JSON.stringify(played.data))
+    assert.equal(pushedTo('dev-bet').length, 0, 'nothing while it is open')
+
+    await call('POST', `/bet/markets/${market.data.id}/settle`, 'admin', { outcomeId: yes.id })
+    const [won] = await until(async () => pushedTo('dev-bet'), list => list.length > 0, 5)
+    assert.match(won.title, /^Du vant \d+ T$/)
+    assert.equal(won.body, 'Ja · Kommer varselet?')
+    assert.equal(won.url, '/mine-spill?vis=avgjorte')
+  })
+
+  it('stops when the member turns it off', async () => {
+    const before = pushedTo('dev-teb').length
+    const off = await call('DELETE', '/push/subscriptions', 'dev', { endpoint: subscription('dev-teb').endpoint })
+    assert.equal(off.status, 204)
+    await call('POST', '/feed/posts', 'kari', {
+      body: 'Enda en',
+      visibility: 'members',
+      attachmentIds: [],
+      event: { title: 'Quiz', location: 'Puben', startsAt: '2030-06-02T16:00:00.000Z', endsAt: '2030-06-02T20:00:00.000Z' },
+    })
+    await sleep(500)
+    assert.equal(pushedTo('dev-teb').length, before)
   })
 })
