@@ -419,6 +419,16 @@ describe('TebBet', () => {
     assert.equal((await call('GET', '/bet/activity?kind=spin,nope', 'ola')).status, 400)
   })
 
+  it('logs scratch cards with every field', async () => {
+    const bought = await call('POST', '/bet/flaks/underbergen/buy', 'kari')
+    assert.equal(bought.status, 201, JSON.stringify(bought.data))
+    const scratched = await call('POST', `/bet/flaks/tickets/${bought.data.ticket.id}/scratch`, 'kari', {})
+    assert.equal(scratched.data.ticket.done, true)
+    const [logged] = (await call('GET', '/bet/activity?kind=ticket', 'ola')).data.items
+    assert.equal(logged.id, `ticket:${bought.data.ticket.id}`)
+    assert.deepEqual(logged.fields, scratched.data.ticket.fields)
+  })
+
   it('lets a member try blackjack for free', async () => {
     const before = (await call('GET', '/bet/me', 'ola')).data.balance
     let hand = (await call('POST', '/bet/casino/blackjack/deal', 'ola', { bet: 100, trial: true })).data.hand

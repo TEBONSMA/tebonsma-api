@@ -4,7 +4,7 @@ import { BOT } from './bots/bot.ts'
 import { db } from './db.ts'
 import type { Viewer } from './feed.ts'
 import { spinsBefore } from './flaks.ts'
-import { GAMES } from './flaksGames.ts'
+import { GAMES, type Field } from './flaksGames.ts'
 import { getMembers } from './members.ts'
 
 // Activity: everything that happens on TebBet in one log, the newest first. Every slip played,
@@ -39,6 +39,8 @@ interface TicketRow {
   price: number
   prize: number
   done_at: string
+  // What every field held (JSON); a ticket here is scratched to the end
+  board: string
 }
 
 // A pick on a decided market, with the slip it is on
@@ -155,7 +157,7 @@ export async function listActivity(viewer: Viewer, before: string | null, kinds:
   const tickets = kinds.includes('ticket')
     ? (db
         .prepare(
-          `SELECT id, username, game, price, prize, done_at FROM flaks_tickets
+          `SELECT id, username, game, price, prize, done_at, board FROM flaks_tickets
            WHERE status = 'done' AND done_at < ? ORDER BY done_at DESC LIMIT ?`,
         )
         .all(until, PAGE) as unknown as TicketRow[])
@@ -227,6 +229,8 @@ export async function listActivity(viewer: Viewer, before: string | null, kinds:
       gameName: GAMES.find(game => game.id === row.game)?.name ?? row.game,
       price: row.price,
       prize: row.prize,
+      // Every field, as the ticket was scratched
+      fields: JSON.parse(row.board) as Field[],
     })),
     ...spins.map(({ username, spin }) => ({
       kind: 'spin' as const,
