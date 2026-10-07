@@ -15,6 +15,7 @@ import { hasBackend, useBackend } from './mail/backend.ts'
 import { imapBackend } from './mail/imapBackend.ts'
 import { startScheduler } from './mail/scheduled.ts'
 import { memberRoutes } from './memberRoutes.ts'
+import { startNewMarketsCheck } from './newMarkets.ts'
 import { pushRoutes } from './pushRoutes.ts'
 import { getProfile as readProfile, setAvatar, updateProfile, type ProfileChanges } from './lldap.ts'
 import { rememberProfile } from './members.ts'
@@ -179,3 +180,6 @@ if (!trial) {
   clearUnplayed()
   setInterval(clearUnplayed, 10 * 60 * 1000)
 }
+
+// Every hour, a push to TebBet's members about markets that have opened since
+if (!trial) startNewMarketsCheck()

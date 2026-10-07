@@ -123,6 +123,14 @@ export function pushTo(site: PushSite, usernames: string[], message: PushMessage
   void deliver(rows, message)
 }
 
+// The members with notifications on for the site
+export const pushSubscribers = (site: PushSite) =>
+  sender
+    ? (db.prepare('SELECT DISTINCT username FROM push_subscriptions WHERE site = ?').all(site) as { username: string }[]).map(
+        row => row.username,
+      )
+    : []
+
 // To every member with notifications on, but the one who caused it
 export function pushToAll(site: PushSite, except: string, message: PushMessage) {
   if (!sender) return
