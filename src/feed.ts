@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto'
 import { HTTPException } from 'hono/http-exception'
-import { db, transaction } from './db.ts'
+import { afterCommit, db, transaction } from './db.ts'
 import { voidEventMarkets } from './bets.ts'
 import { eventOf, isEvent, isOrganizer, organizersOf, saveEvent, type EventInput } from './events.ts'
 import { getMembers, type PublicMember } from './members.ts'
+import { pushTo, pushToAll, type PushMessage } from './push.ts'
 
 // Who is looking. Visitors who aren't logged in are null and only see public posts.
 export interface Viewer {
@@ -618,6 +619,18 @@ export async function addComment(viewer: Viewer, postId: string, body: string, p
         now(),
       )
     }
+    afterCommit(() =>
+      pushFrom(viewer.username, name => {
+        for (const [recipient, kind] of recipients) {
+          pushTo('teb', [recipient], {
+            title: kind === 'reply' ? `${name} svarte på kommentaren din` : `${name} kommenterte innlegget ditt`,
+            body: excerpt(body),
+            url: `/feed/${postId}`,
+            tag: `comment:${id}`,
+          })
+        }
+      }),
+    )
   })
 
   const row = db.prepare(`${COMMENT_SELECT} WHERE c.id = ?`).get(id) as unknown as CommentRow
@@ -726,15 +739,41 @@ export function readAttachment(viewer: Viewer | null, id: string) {
 
 type AnnouncementKind = 'event' | 'announcement'
 
+// A comment can be pictures only
+const excerpt = (body: string) => {
+  const text = body || 'Bilde'
+  return text.length > EXCERPT_LENGTH ? `${text.slice(0, EXCERPT_LENGTH)}…` : text
+}
+
+// Push notifications say who did it, by the name the bell shows. They go out after the change
+// is saved, and a failure there is only logged.
+function pushFrom(actor: string, send: (name: string) => void) {
+  getMembers([actor])
+    .then(members => send(members.get(actor)!.name))
+    .catch(err => console.error('Could not send push notifications:', err))
+}
+
 // Runs inside the transaction of whatever is being announced
 function announce(kind: AnnouncementKind, actor: string, postId: string, body: string) {
+  const id = randomUUID()
   db.prepare('INSERT INTO announcements (id, kind, actor, post_id, body, created_at) VALUES (?, ?, ?, ?, ?, ?)').run(
-    randomUUID(),
+    id,
     kind,
     actor,
     postId,
     body,
     now(),
+  )
+  afterCommit(() =>
+    pushFrom(actor, name => {
+      const message: PushMessage = {
+        title: kind === 'event' ? `${name} publiserte et arrangement` : `${name} sendte en kunngjøring`,
+        body: excerpt(body),
+        url: `/feed/${postId}`,
+        tag: `announcement:${id}`,
+      }
+      pushToAll('teb', actor, message)
+    }),
   )
 }
 
@@ -791,20 +830,16 @@ export async function listNotifications(viewer: Viewer) {
 
   return {
     unread,
-    items: rows.map(row => {
-      // A comment can be pictures only
-      const text = row.body || 'Bilde'
-      return {
-        id: row.id,
-        kind: row.kind,
-        actor: members.get(row.actor)!,
-        postId: row.post_id,
-        commentId: row.comment_id,
-        excerpt: text.length > EXCERPT_LENGTH ? `${text.slice(0, EXCERPT_LENGTH)}…` : text,
-        createdAt: row.created_at,
-        read: row.read === 1,
-      }
-    }),
+    items: rows.map(row => ({
+      id: row.id,
+      kind: row.kind,
+      actor: members.get(row.actor)!,
+      postId: row.post_id,
+      commentId: row.comment_id,
+      excerpt: excerpt(row.body),
+      createdAt: row.created_at,
+      read: row.read === 1,
+    })),
   }
 }
 

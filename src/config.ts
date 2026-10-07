@@ -26,6 +26,16 @@ function offlineConfig(userinfoUrl: string, redirectOrigin: string) {
   }
 }
 
+// Push notifications (Web Push) need a key pair of the API's own, made once with
+// `npx web-push generate-vapid-keys`. Without both keys, notifications are off.
+function pushConfig() {
+  const publicKey = process.env.VAPID_PUBLIC_KEY
+  const privateKey = process.env.VAPID_PRIVATE_KEY
+  if (!publicKey || !privateKey) return null
+  // Who the push services can contact about the pushes
+  return { publicKey, privateKey, subject: process.env.VAPID_SUBJECT ?? 'https://tebonsma.no' }
+}
+
 const allowedOrigins = (process.env.ALLOWED_ORIGINS ?? 'https://tebonsma.no')
   .split(',')
   .map(origin => origin.trim())
@@ -53,6 +63,7 @@ export const config = {
     sievePort: Number(process.env.MAIL_SIEVE_PORT ?? 4190),
     offline: offlineConfig(userinfoUrl, allowedOrigins[0] ?? 'https://tebonsma.no'),
   },
+  push: pushConfig(),
   lldap: {
     url: (process.env.LLDAP_URL ?? 'http://lldap:17170').replace(/\/$/, ''),
     username: required('LLDAP_USERNAME'),

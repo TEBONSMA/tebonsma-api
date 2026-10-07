@@ -380,6 +380,32 @@ patched by hand, and the LDAP password login stays, so phone mail apps keep work
   Pointing Dovecot at Authelia's token introspection endpoint instead would need a confidential
   client of its own and `active_attribute = active` in `dovecot-oauth2.conf.ext`.
 
+### Push notifications
+
+Both sites can be installed on a phone or computer (as a PWA) and turn on push notifications
+per browser. The site subscribes through the browser's push service and hands the subscription
+in here; the API then pushes, end-to-end encrypted (Web Push with VAPID), through Google,
+Apple, Mozilla or Microsoft. Tapping a notification opens `url` on the site that subscribed.
+
+| Method | Path | What |
+|---|---|---|
+| GET | `/push/key` | The API's public VAPID key, which the browser subscribes with. `null` while push is off. No login needed |
+| POST | `/push/subscriptions` | Turn notifications on for this browser: `{ site: 'teb' \| 'tebbet', subscription }`, where `subscription` is the browser's `PushSubscription` as JSON. A browser already handed in moves to the member asking |
+| DELETE | `/push/subscriptions` | Turn them off: `{ endpoint }` |
+
+What is pushed, after the change is saved:
+
+| Site | When | To |
+|---|---|---|
+| `teb` | A comment on a post, or a reply to a comment | The same members the bell tells |
+| `teb` | A new event, or an organizer's announcement | Every member with notifications on, but the one who made it |
+| `tebbet` | A slip is decided: won, lost or voided | The member who played it. Not for a roulette miss as the slip is placed, which the member sees at once |
+| `tebbet` | Once an hour, if markets have opened since the last look and are still open: one push per member about them all | Every member with notifications on, leaving out markets they are kept out of or made themselves |
+
+Only addresses at the push services above are accepted, never one inside the network, since
+the API posts to whatever address it is given. A subscription the push service says is gone
+(404 or 410) is deleted. Nothing is pushed without keys, or in a trial run of a new version.
+
 ## Requirements
 
 - Node.js 22.18 or newer, which runs the TypeScript sources directly (no build step), or Docker.
@@ -413,9 +439,12 @@ patched by hand, and the LDAP password login stays, so phone mail apps keep work
 | `MAIL_OFFLINE_KEY` | none | 32-byte key (64 hex characters or base64) that stored refresh tokens are encrypted with. Make one with `openssl rand -hex 32`, and keep it: tokens written with another key can't be read |
 | `MAIL_OFFLINE_REDIRECT_URI` | `<first ALLOWED_ORIGINS>/mail/tillatelse` | Where the login provider sends the member back |
 | `MAIL_OFFLINE_AUTHORIZE_URL`, `MAIL_OFFLINE_TOKEN_URL`, `MAIL_OFFLINE_REVOKE_URL` | the provider's `/api/oidc/...` endpoints, taken from `OIDC_USERINFO_URL` | Only needed if the provider uses other addresses |
+| `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` | none | The key pair push notifications are signed with. Make one with `npx web-push generate-vapid-keys`, and keep it: browsers subscribed with one key won't take pushes signed with another. Without both, push is off |
+| `VAPID_SUBJECT` | `https://tebonsma.no` | Where the push services can reach whoever runs the API (an `https:` or `mailto:` address) |
+| `NEW_MARKETS_CHECK_SECONDS` | `3600` | How often TebBet's members hear about new markets. The first look after a fresh start of the database only starts the clock |
 
 Put the credentials in `.env` (see `.env.example`). It is git-ignored and should never be
-committed. That goes for `MAIL_OFFLINE_CLIENT_SECRET` and `MAIL_OFFLINE_KEY` too.
+committed. That goes for `MAIL_OFFLINE_CLIENT_SECRET`, `MAIL_OFFLINE_KEY` and `VAPID_PRIVATE_KEY` too.
 
 ## Running with Docker Compose
 
@@ -486,6 +515,10 @@ another site to check that none of it runs or loads. All mail is kept in memory,
 mail server to set up, and mail between `dev` and `admin` is delivered, auto-replies included. They are kept in `./data/mock` while it runs; set `DATA_DIR` to
 keep scores and the feed between restarts. Add or change users in `dev/mock-auth.ts`.
 
+Push notifications work against the mock too. Without `VAPID_*` set, each run makes a key pair
+of its own, so the sites can turn notifications on, and every push is printed in the terminal
+(`[push] {...}`) instead of sent. Set both keys to have them really sent.
+
 To use it from the site, run `npm run dev:mock` in the Tebonsma.no repo's `teb-app` folder
 as well, and for TebBet in the tebbet repo (it runs on port 5174; both ports are allowed).
 
@@ -515,6 +548,8 @@ even after you have logged out.
 - The mail endpoints don't change that: they only ever open the mailbox of the member whose
   token is on the request, and nothing here acts on someone else's mailbox. Sharing is a copy
   in this API's database, which the member it is shared with can read and nobody else.
+- Push subscriptions are not secret on their own, but `VAPID_PRIVATE_KEY` lets whoever has it
+  push to every member who has notifications on, so keep it with the other secrets.
 - The one secret kept for a member is the encrypted refresh token for sending later, and only
   for members who have said yes. Keep `MAIL_OFFLINE_KEY` and the data volume private, and
   remember that whoever has both can send mail as those members until the tokens are revoked.
