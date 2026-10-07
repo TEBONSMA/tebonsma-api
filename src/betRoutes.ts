@@ -1,6 +1,7 @@
 import { Hono, type Context } from 'hono'
 import { bodyLimit } from 'hono/body-limit'
 import { HTTPException } from 'hono/http-exception'
+import { ACTIVITY_KINDS, listActivity, type ActivityKind } from './activity.ts'
 import { requireCaller, type Env } from './auth.ts'
 import {
   closeMarket,
@@ -47,6 +48,7 @@ import {
   openTickets,
   ROULETTE_TYPES,
   scratch,
+  tryTicket,
   spinRoulette,
   type RouletteBet,
 } from './flaks.ts'
@@ -372,6 +374,8 @@ betRoutes.post('/bet/flaks/:game/buy', async c => {
   const ticket = buyTicket(viewer, c.req.param('game') ?? '')
   return c.json({ ticket, account: await getAccount(viewer) }, 201)
 })
+// A free ticket to try the game, with every field; no coins move
+betRoutes.post('/bet/flaks/:game/try', c => c.json(tryTicket(c.req.param('game') ?? '')))
 // { field } scratches one field, {} all that are left
 betRoutes.post('/bet/flaks/tickets/:id/scratch', async c => {
   const viewer = viewerOf(c)
@@ -386,11 +390,21 @@ betRoutes.post('/bet/casino/roulette/spin', async c => {
   return c.json({ ...spin, account: await getAccount(viewer) })
 })
 betRoutes.get('/bet/ledger', c => c.json(listLedger(viewerOf(c))))
+// Everything played and decided on TebBet, the newest first: ?before=<next> for older, ?kind=slip,
+// result or ticket for one kind
+betRoutes.get('/bet/activity', async c => {
+  const before = c.req.query('before')
+  if (before !== undefined && Number.isNaN(Date.parse(before))) throw bad('Ugyldig tidspunkt')
+  const kind = c.req.query('kind')
+  if (kind !== undefined && !ACTIVITY_KINDS.includes(kind as ActivityKind)) throw bad('Ugyldig type')
+  const kinds = kind === undefined ? ACTIVITY_KINDS : [kind as ActivityKind]
+  return c.json(await listActivity(viewerOf(c), before === undefined ? null : new Date(before).toISOString(), kinds))
+})
 betRoutes.get('/bet/leaderboard', async c => c.json(await getLeaderboard()))
 // Another member's page: their place, coins and slips (?status=open|settled)
 // With the scratch cards they have finished among the settled
 betRoutes.get('/bet/members/:id', async c => {
   const settled = c.req.query('status') === 'settled'
-  const page = await getMemberPage(id(c), settled)
+  const page = await getMemberPage(viewerOf(c), id(c), settled)
   return c.json({ ...page, tickets: settled ? doneTicketsOfMember(id(c)) : [] })
 })

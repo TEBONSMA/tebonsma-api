@@ -5,6 +5,7 @@ import { cors } from 'hono/cors'
 import { HTTPException } from 'hono/http-exception'
 import { requireCaller, type Env } from './auth.ts'
 import { betRoutes } from './betRoutes.ts'
+import { removeUnplayedMarkets } from './bets.ts'
 import { startBots } from './bots/index.ts'
 import { config } from './config.ts'
 import { eventRoutes } from './eventRoutes.ts'
@@ -153,7 +154,7 @@ app.notFound(c => c.json({ error: 'Finnes ikke' }, 404))
 // The real mail server, unless a stand-in was registered first (npm run dev:mock does)
 if (!hasBackend()) useBackend(imapBackend)
 // A trial run of a new version (deploy/deploy.sh) answers requests but does nothing on its own:
-// no scheduled mail goes out and the bot stays off
+// no scheduled mail goes out, the bot stays off and no markets are cleared away
 const trial = process.env.TRIAL === '1'
 if (!trial) startScheduler()
 
@@ -162,3 +163,17 @@ serve({ fetch: app.fetch, port: config.port }, info => {
 })
 
 if (!trial) startBots()
+
+// Markets nobody played on are cleared away a day after they close
+function clearUnplayed() {
+  try {
+    const removed = removeUnplayedMarkets()
+    if (removed > 0) console.log(`removed ${removed} unplayed ${removed === 1 ? 'market' : 'markets'}`)
+  } catch (err) {
+    console.error('could not remove unplayed markets:', err)
+  }
+}
+if (!trial) {
+  clearUnplayed()
+  setInterval(clearUnplayed, 10 * 60 * 1000)
+}

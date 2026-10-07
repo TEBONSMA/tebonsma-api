@@ -105,12 +105,14 @@ TebBet. Markets that aren't about an event are in **groups**, like "Andre spill"
 "Sponsorer", which admins make, rename and run; admins also set the order of events and groups
 on the front page. The group "Landslaget" is filled by the bot (below). Whoever opens a market can
 keep members out of it, typically the one it is about: they see it but can't play on it, and
-bets they placed before stand. A **slip** is one bet:
+bets they placed before stand. They don't see its odds or how the coins on it are spread, on the
+market or in anyone's bets. A **slip** is one bet:
 a stake on one outcome (single), or on outcomes in several markets that must all happen
 (combination, odds multiplied). Odds are locked when a slip is played. When a market is
 decided, slips are paid at once; when it is called off, or its event deleted, stakes are paid
 back, and in a combination it counts as odds 1,00. Reopening a decided market takes what it
-paid back out again.
+paid back out again. A market nobody played on is removed a day after it closed; until then it
+can get a new closing time.
 
 | Method | Path | Does |
 |---|---|---|
@@ -137,11 +139,13 @@ paid back out again.
 | POST | `/bet/slips` | Play: `{ slips: [{ stake, selections }] }`, all or none. A selection is `{ outcomeId, odds }`, or `{ marketId, side, line, odds }` for over/under |
 | GET | `/bet/slips?status=open\|settled` | Own slips |
 | GET | `/bet/ledger` | Own account statement |
+| GET | `/bet/activity` | Everything played and decided on TebBet, the newest first: every slip, every market decided or called off (with everyone who played on it: their pick, odds, whether it came true and what their slip won or lost), every scratch card scratched to the end. `?kind=slip`, `result` or `ticket` for one kind; `?before=` the `next` of the previous page for older |
 | GET | `/bet/leaderboard` | Everyone who has played, by coins in hand plus coins in play. Equal totals share a `rank` (1, 1, 1, 4) |
 | GET | `/bet/members/:id?status=open\|settled` | A member's page: place on the leaderboard, coins and slips (not their account statement), and with `settled` the scratch cards they have finished |
 | GET | `/bet/flaks` | The scratch cards (price, prizes and odds, rules) and own tickets not scratched to the end |
 | GET | `/bet/flaks/done` | Own tickets scratched to the end |
 | POST | `/bet/flaks/:game/buy` | Buy a ticket; its outcome is drawn now |
+| POST | `/bet/flaks/:game/try` | A free ticket to try the game, with every field at once; nothing is kept, taken or paid |
 | POST | `/bet/flaks/tickets/:id/scratch` | Scratch `{ field }`, or `{}` for every field left; the last one pays the prize |
 | POST | `/bet/casino/roulette/spin` | Roulette: `{ bets: [{ type, number?, stake }] }`, settled at once |
 
