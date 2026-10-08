@@ -175,7 +175,7 @@ function land(row: RoundRow, takenAt: number | null, at: number) {
     new Date(at).toISOString(),
     row.id,
   )
-  if (payout > 0) addCasinoRow(row.username, payout, ROUND_GAMES.buran, `Tok ut ved ${(takenAt! / 100).toFixed(2).replace('.', ',')}x`)
+  if (payout > 0) addCasinoRow(row.username, payout, ROUND_GAMES.buran, `Hoppet av ved ${(takenAt! / 100).toFixed(2).replace('.', ',')}x`)
 }
 
 // A round whose car has crashed by now ends there, paid at the target if it got that far. One
