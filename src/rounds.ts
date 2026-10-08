@@ -3,6 +3,7 @@ import { HTTPException } from 'hono/http-exception'
 import { addCasinoRow, balanceOf } from './bets.ts'
 import { drawCrash, MAX_CRASH, multiplierAt, timeAt } from './crash.ts'
 import { db, transaction } from './db.ts'
+import { takeGift } from './gifts.ts'
 import type { Viewer } from './feed.ts'
 import { MEMBERS } from './flaksGames.ts'
 import { usernameOf } from './members.ts'
@@ -94,21 +95,26 @@ const slotDetail = (result: SlotResult, members: string[]) => ({
   times: Math.min(result.win, 500_000) / 100,
 })
 
-export function spinSlot(viewer: Viewer, stake: number, trial: boolean) {
+// gift: a spin on the house, at its own stake, with nothing taken from the member
+export function spinSlot(viewer: Viewer, stake: number, trial: boolean, gift = false) {
   const result = playSlot(randomInt)
   const members = collectorsFor()
-  const payout = payoutOf(stake, result.win)
-  const detail = slotDetail(result, members)
-  if (trial) return { frames: result.frames, members, payout, round: null }
+  if (trial) return { frames: result.frames, members, payout: payoutOf(stake, result.win), round: null }
   return transaction(() => {
-    ensureCoins(viewer, stake)
-    addCasinoRow(viewer.username, -stake, ROUND_GAMES.sponsorjakten, 'Spinn')
-    if (payout > 0) addCasinoRow(viewer.username, payout, ROUND_GAMES.sponsorjakten, result.freeSpins > 0 ? `Vant ${payout}, med gratisspinn` : `Vant ${payout}`)
+    const played = gift ? takeGift(viewer.username, 'sponsorjakten') : stake
+    const payout = payoutOf(played, result.win)
+    const detail = { ...slotDetail(result, members), ...(gift && { gift: true }) }
+    if (!gift) {
+      ensureCoins(viewer, played)
+      addCasinoRow(viewer.username, -played, ROUND_GAMES.sponsorjakten, 'Spinn')
+    }
+    const won = result.freeSpins > 0 ? `Vant ${payout}, med gratisspinn` : `Vant ${payout}`
+    if (payout > 0) addCasinoRow(viewer.username, payout, ROUND_GAMES.sponsorjakten, gift ? `${won}, på huset` : won)
     const row: RoundRow = {
       id: randomUUID(),
       username: viewer.username,
       game: 'sponsorjakten',
-      stake,
+      stake: played,
       payout,
       status: 'done',
       detail: JSON.stringify(detail),
@@ -130,14 +136,17 @@ const launchedAt = (row: RoundRow) => Date.parse(row.created_at)
 // A round that is over: taken out at a multiplier, or blown up. at: when it ended.
 function land(row: RoundRow, takenAt: number | null, at: number) {
   const payout = takenAt === null ? 0 : Math.floor((row.stake * takenAt) / 100)
-  const detail = { crash: row.crash, takenAt, target: row.target }
+  // What it was started with (a drive on the house), and how it went
+  const started = JSON.parse(row.detail) as { gift?: boolean }
+  const detail = { ...started, crash: row.crash, takenAt, target: row.target }
   db.prepare("UPDATE flaks_rounds SET status = 'done', payout = ?, detail = ?, done_at = ? WHERE id = ? AND status = 'playing'").run(
     payout,
     JSON.stringify(detail),
     new Date(at).toISOString(),
     row.id,
   )
-  if (payout > 0) addCasinoRow(row.username, payout, ROUND_GAMES.fyllekjoring, `Hoppet av ved ${(takenAt! / 100).toFixed(2).replace('.', ',')}x`)
+  const jumped = `Hoppet av ved ${(takenAt! / 100).toFixed(2).replace('.', ',')}x`
+  if (payout > 0) addCasinoRow(row.username, payout, ROUND_GAMES.fyllekjoring, started.gift ? `${jumped}, på huset` : jumped)
 }
 
 // A round whose car has crashed by now ends there, paid at the target if it got that far. One
@@ -180,23 +189,27 @@ export function currentFlight(viewer: Viewer) {
 }
 
 // target: take out by itself at this multiplier (hundredths), or null
-export function launch(viewer: Viewer, stake: number, target: number | null) {
+// gift: a drive on the house, at its own stake, with nothing taken from the member
+export function launch(viewer: Viewer, stake: number, target: number | null, gift = false) {
   return transaction(() => {
     const flying = db.prepare("SELECT * FROM flaks_rounds WHERE username = ? AND game = 'fyllekjoring' AND status = 'playing'").all(viewer.username) as unknown as RoundRow[]
     flying.forEach(row => settleIfLanded(row))
     if (db.prepare("SELECT 1 FROM flaks_rounds WHERE username = ? AND game = 'fyllekjoring' AND status = 'playing'").get(viewer.username)) {
       throw new HTTPException(409, { message: 'Du er allerede ute og kjører' })
     }
-    ensureCoins(viewer, stake)
-    addCasinoRow(viewer.username, -stake, ROUND_GAMES.fyllekjoring, 'Kjøretur')
+    const played = gift ? takeGift(viewer.username, 'fyllekjoring') : stake
+    if (!gift) {
+      ensureCoins(viewer, played)
+      addCasinoRow(viewer.username, -played, ROUND_GAMES.fyllekjoring, 'Kjøretur')
+    }
     const row: RoundRow = {
       id: randomUUID(),
       username: viewer.username,
       game: 'fyllekjoring',
-      stake,
+      stake: played,
       payout: 0,
       status: 'playing',
-      detail: '{}',
+      detail: gift ? JSON.stringify({ gift: true }) : '{}',
       crash: drawCrash(randomInt),
       target,
       created_at: now(),

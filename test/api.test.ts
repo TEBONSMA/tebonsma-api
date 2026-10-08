@@ -651,6 +651,32 @@ describe('more casino', () => {
     const page = await call('GET', `/bet/members/${log.data.items[0].member.id}?status=settled`, 'kari')
     assert.ok(page.data.rounds.length >= 1)
   })
+
+  it('gives every member ten rounds on the house in each game, played without coins', async () => {
+    const me = (await call('GET', '/bet/me', 'admin')).data
+    assert.deepEqual(me.gifts, { sponsorjakten: { left: 10, stake: 25 }, fyllekjoring: { left: 10, stake: 25 } })
+
+    const spin = await call('POST', '/bet/casino/sponsorjakten/spin', 'admin', { gift: true })
+    assert.equal(spin.status, 200, JSON.stringify(spin.data))
+    assert.equal(spin.data.round.stake, 25)
+    assert.equal(spin.data.round.detail.gift, true)
+    assert.equal(spin.data.account.balance, me.balance + spin.data.payout, 'nothing taken, the win paid')
+    assert.equal(spin.data.account.gifts.sponsorjakten.left, 9)
+
+    const drive = await call('POST', '/bet/casino/fyllekjoring/launch', 'admin', { gift: true })
+    assert.equal(drive.status, 201, JSON.stringify(drive.data))
+    assert.equal(drive.data.flight.stake, 25)
+    assert.equal(drive.data.account.gifts.fyllekjoring.left, 9)
+    assert.equal(drive.data.account.balance, me.balance + spin.data.payout)
+    const landed = (await call('GET', `/bet/casino/fyllekjoring/${drive.data.flight.id}/landing`, 'admin')).data.flight
+    assert.equal(landed.detail.gift, true)
+    assert.equal(await balance('admin'), me.balance + spin.data.payout + landed.payout)
+
+    // Once they are used, there are no more
+    for (let i = 0; i < 9; i++) assert.equal((await call('POST', '/bet/casino/sponsorjakten/spin', 'admin', { gift: true })).status, 200)
+    assert.equal((await call('POST', '/bet/casino/sponsorjakten/spin', 'admin', { gift: true })).status, 400)
+    assert.equal((await call('GET', '/bet/me', 'admin')).data.gifts.sponsorjakten, undefined)
+  })
 })
 
 describe('push notifications', () => {

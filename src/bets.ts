@@ -2,6 +2,7 @@ import { randomInt, randomUUID } from 'node:crypto'
 import { HTTPException } from 'hono/http-exception'
 import { config } from './config.ts'
 import { afterCommit, db, transaction } from './db.ts'
+import { giftsOf, giveGifts } from './gifts.ts'
 import { colorOf, ROULETTE_ODDS, spotLabel, wins, type RouletteSpot } from './roulette.ts'
 import type { Viewer } from './feed.ts'
 import { listGroupMembers } from './lldap.ts'
@@ -363,6 +364,7 @@ export function ensureAccount(username: string) {
         "INSERT OR IGNORE INTO bet_ledger (id, username, amount, kind, period, created_at) VALUES (?, ?, ?, 'allowance', ?, ?)",
       ).run(randomUUID(), username, WEEKLY_ALLOWANCE, monday, now())
     }
+    giveGifts(username)
   })
 }
 
@@ -400,6 +402,8 @@ export async function getAccount(viewer: Viewer) {
     inPlay: inPlayOf(viewer.username),
     weeklyAllowance: WEEKLY_ALLOWANCE,
     nextAllowance: mondaysBetween(today, dateOf(dayNumber(today) + 7))[0],
+    // Rounds on the house left in the casino games
+    gifts: giftsOf(viewer.username),
   }
 }
 

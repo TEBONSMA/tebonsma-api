@@ -468,22 +468,25 @@ betRoutes.post('/bet/casino/roulette/spin', async c => {
   const spin = spinRoulette(viewer, readRouletteBets(await readBody(c)))
   return c.json({ ...spin, account: await getAccount(viewer) })
 })
-// Sponsorjakten: { stake, trial? }. The whole spin comes back as frames to
-// show, free spins included.
+// Sponsorjakten: { stake, trial? } or { gift: true } for a spin on the house. The whole spin comes
+// back as frames to show, free spins included.
 betRoutes.post('/bet/casino/sponsorjakten/spin', async c => {
   const body = await readBody(c)
   const viewer = viewerOf(c)
-  const spin = spinSlot(viewer, readStake(body.stake), body.trial === true)
+  const gift = body.gift === true && body.trial !== true
+  const spin = spinSlot(viewer, gift ? 0 : readStake(body.stake), body.trial === true, gift)
   return c.json({ ...spin, account: await getAccount(viewer) })
 })
-// Fyllekjøring: the own car on the road, if any; start { stake, target? };
+// Fyllekjøring: the own car on the road, if any; start { stake, target? } or { gift: true, target? }
+// for a drive on the house;
 // take out; and wait for the landing, which answers when the round is over (at the latest when
 // the car crashes)
 betRoutes.get('/bet/casino/fyllekjoring', c => c.json({ flight: currentFlight(viewerOf(c)) }))
 betRoutes.post('/bet/casino/fyllekjoring/launch', async c => {
   const body = await readBody(c)
   const viewer = viewerOf(c)
-  const flight = launch(viewer, readStake(body.stake), readTarget(body.target))
+  const gift = body.gift === true
+  const flight = launch(viewer, gift ? 0 : readStake(body.stake), readTarget(body.target), gift)
   return c.json({ flight, account: await getAccount(viewer) }, 201)
 })
 // A free round: the crash point comes along and the site flies it alone

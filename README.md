@@ -116,7 +116,7 @@ can get a new closing time.
 
 | Method | Path | Does |
 |---|---|---|
-| GET | `/bet/me` | Own balance, coins in play and the next Monday |
+| GET | `/bet/me` | Own balance, coins in play, the next Monday, and `gifts`: rounds on the house left in Sponsorjakten and Fyllekjøring (`{ left, stake }` per game; every member gets ten at 25 coins in each, for their launch) |
 | GET | `/bet/events` | Coming events and recent results, with their markets and current odds |
 | GET | `/bet/events/:id` | One event, every market on it and the latest bets |
 | GET | `/bet/groups` | Every group with its markets, and `front`: where admins have put events and groups on the front page (`event:<id>`, `group:<id>`) |
@@ -156,9 +156,9 @@ can get a new closing time.
 | POST | `/bet/casino/blackjack/deal` | Deal a hand: `{ bet, trial? }`. A free one (`trial: true`) takes and pays nothing |
 | POST | `/bet/casino/blackjack/:id/:action` | `hit`, `stand`, `double` or `split` the hand being played |
 | GET | `/bet/flaks/hands` | Own blackjack hands played to the end |
-| POST | `/bet/casino/sponsorjakten/spin` | Sponsorjakten, the collector slot (`src/slot.ts`): `{ stake, trial? }`. The whole spin comes back as `frames` to show, free spins included, with the four members who hunt the sponsors' goods |
+| POST | `/bet/casino/sponsorjakten/spin` | Sponsorjakten, the collector slot (`src/slot.ts`): `{ stake, trial? }`, or `{ gift: true }` for a spin on the house (`src/gifts.ts`): no coins taken, the win paid. The whole spin comes back as `frames` to show, free spins included, with the four members who hunt the sponsors' goods |
 | GET | `/bet/casino/fyllekjoring` | Fyllekjøring, the crash game (`src/crash.ts`): the own car on the road, if any (`{ flight }`) |
-| POST | `/bet/casino/fyllekjoring/launch` | Start: `{ stake, target? }`, where `target` takes out by itself at that multiplier (1.01 to 250). One drive at a time; the crash point stays secret until the round is over. A car that gets all the way (250x) pays that to everyone still in it |
+| POST | `/bet/casino/fyllekjoring/launch` | Start: `{ stake, target? }`, or `{ gift: true, target? }` for a drive on the house, where `target` takes out by itself at that multiplier (1.01 to 250). One drive at a time; the crash point stays secret until the round is over. A car that gets all the way (250x) pays that to everyone still in it |
 | POST | `/bet/casino/fyllekjoring/:id/takeout` | Take out at the multiplier the car has reached by the server's clock, if it hasn't crashed |
 | GET | `/bet/casino/fyllekjoring/:id/landing` | Answers when the round is over, at the latest when the car crashes |
 | POST | `/bet/casino/fyllekjoring/try` | A free round: the crash point, for the site to fly alone |
