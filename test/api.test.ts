@@ -599,14 +599,26 @@ describe('more casino', () => {
   })
 
   it('drives Fyllekjøring until the member takes out or the car crashes', async () => {
-    const before = await balance('ola')
-    const launched = await call('POST', '/bet/casino/fyllekjoring/launch', 'ola', { stake: 10 })
-    assert.equal(launched.status, 201, JSON.stringify(launched.data))
-    const flight = launched.data.flight
-    assert.equal(flight.status, 'playing')
-    assert.ok(!('crash' in flight.detail), 'the crash point is secret while it flies')
-    assert.equal((await call('GET', '/bet/casino/fyllekjoring', 'ola')).data.flight?.id, flight.id)
-    assert.equal((await call('POST', '/bet/casino/fyllekjoring/launch', 'ola', { stake: 10 })).status, 409, 'one drive at a time')
+    // A car can crash near the start, before it can be looked at (it climbs 50 times as fast here):
+    // then it drives again, once that one, and any second drive that got going, is over
+    let before = 0
+    let flight
+    for (let tries = 0; ; tries++) {
+      assert.ok(tries < 10, 'cars that keep crashing at once')
+      before = await balance('ola')
+      const launched = await call('POST', '/bet/casino/fyllekjoring/launch', 'ola', { stake: 10 })
+      assert.equal(launched.status, 201, JSON.stringify(launched.data))
+      flight = launched.data.flight
+      assert.equal(flight.status, 'playing')
+      assert.ok(!('crash' in flight.detail), 'the crash point is secret while it flies')
+      const current = (await call('GET', '/bet/casino/fyllekjoring', 'ola')).data.flight
+      const again = await call('POST', '/bet/casino/fyllekjoring/launch', 'ola', { stake: 10 })
+      // One drive at a time
+      if (current?.id === flight.id && again.status === 409) break
+      const over = (await call('GET', `/bet/casino/fyllekjoring/${flight.id}/landing`, 'ola')).data.flight
+      assert.ok(over.detail.crash < 150, 'only a car that crashed near the start is over this soon')
+      if (again.status === 201) await call('GET', `/bet/casino/fyllekjoring/${again.data.flight.id}/landing`, 'ola')
+    }
 
     const taken = await call('POST', `/bet/casino/fyllekjoring/${flight.id}/takeout`, 'ola')
     assert.equal(taken.status, 200)
