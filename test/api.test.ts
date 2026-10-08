@@ -69,6 +69,8 @@ before(async () => {
       SITE_URL: ORIGIN,
       BOTS: 'off',
       NEW_MARKETS_CHECK_SECONDS: '1',
+      // Buran's rocket climbs 50 times as fast: 250x in about a second
+      CRASH_SPEED: '50',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
@@ -547,6 +549,112 @@ describe('TebBet', () => {
   })
 })
 
+describe('more casino', () => {
+  const balance = async (user: string) => (await call('GET', '/bet/me', user)).data.balance as number
+
+  it('spins Pirotsma, with frames that add up to the win', async () => {
+    const before = await balance('kari')
+    const spin = await call('POST', '/bet/casino/pirotsma/spin', 'kari', { stake: 20 })
+    assert.equal(spin.status, 200, JSON.stringify(spin.data))
+    assert.equal(spin.data.members.length, 4)
+    assert.equal(await balance('kari'), before - 20 + spin.data.payout)
+
+    // Play the frames back: every step is a collector taking the piece next to it
+    let pieces = new Map<number, any>()
+    let collectors: any[] = []
+    let won = 0
+    for (const frame of spin.data.frames) {
+      if (frame.type === 'fill') {
+        pieces = new Map(frame.pieces.map((p: any) => [p.id, p]))
+        collectors = frame.collectors.map((c: any) => ({ ...c }))
+        assert.equal(pieces.size + collectors.length, 36, 'a full grid')
+      } else if (frame.type === 'step') {
+        const piece = pieces.get(frame.piece)
+        const collector = collectors.find(c => c.color === frame.color)
+        assert.ok(piece, 'the piece is on the grid')
+        assert.equal(Math.abs(piece.row - collector.row) + Math.abs(piece.col - collector.col), 1, 'next to the collector')
+        assert.ok(piece.kind !== 'gem' || piece.color === frame.color, 'a gem of its own colour')
+        pieces.delete(frame.piece)
+        collector.row = piece.row
+        collector.col = piece.col
+        won += frame.win
+      } else if (frame.type === 'fall') {
+        for (const move of frame.moved) {
+          if (move.piece !== undefined) Object.assign(pieces.get(move.piece), { row: move.row, col: move.col })
+          else Object.assign(collectors.find(c => c.color === move.collector), { row: move.row, col: move.col })
+        }
+        for (const piece of frame.added) pieces.set(piece.id, piece)
+        assert.equal(pieces.size + collectors.length, 36, 'full again after the fall')
+      }
+    }
+    assert.equal(spin.data.payout, Math.floor((20 * Math.min(won, 500_000)) / 100))
+
+    const free = await call('POST', '/bet/casino/pirotsma/spin', 'kari', { stake: 20, trial: true })
+    assert.equal(free.status, 200)
+    assert.equal(free.data.round, null)
+    assert.equal(await balance('kari'), before - 20 + spin.data.payout, 'a free spin moves nothing')
+    const mine = await call('GET', '/bet/flaks/rounds', 'kari')
+    assert.equal(mine.data.length, 1, 'only the real spin is kept')
+    assert.equal((await call('POST', '/bet/casino/pirotsma/spin', 'kari', { stake: 0 })).status, 400)
+  })
+
+  it('spins TEB-hjulet and pays the symbol it stops on', async () => {
+    const odds: Record<string, number> = { jarritos: 1.88, underberg: 2.88, nachspiel: 6.17, pulebord: 10.8, nyttar: 21.6, sommerfest: 43.2 }
+    const before = await balance('kari')
+    const bets = { jarritos: 20, sommerfest: 5 }
+    const spin = await call('POST', '/bet/casino/hjulet/spin', 'kari', { bets })
+    assert.equal(spin.status, 200, JSON.stringify(spin.data))
+    const { symbol, multiplier, stops } = spin.data
+    assert.ok(stops.length >= 1)
+    const expected = symbol in bets ? Math.floor((bets as any)[symbol] * odds[symbol] * multiplier) : 0
+    assert.equal(spin.data.payout, expected)
+    assert.equal(await balance('kari'), before - 25 + expected)
+    assert.equal((await call('POST', '/bet/casino/hjulet/spin', 'kari', { bets: { bergen: 10 } })).status, 400)
+    assert.equal((await call('POST', '/bet/casino/hjulet/spin', 'kari', { bets: {} })).status, 400)
+  })
+
+  it('flies Buran until the member takes out or it blows up', async () => {
+    const before = await balance('ola')
+    const launched = await call('POST', '/bet/casino/buran/launch', 'ola', { stake: 10 })
+    assert.equal(launched.status, 201, JSON.stringify(launched.data))
+    const flight = launched.data.flight
+    assert.equal(flight.status, 'playing')
+    assert.ok(!('crash' in flight.detail), 'the crash point is secret while it flies')
+    assert.equal((await call('GET', '/bet/casino/buran', 'ola')).data.flight?.id, flight.id)
+    assert.equal((await call('POST', '/bet/casino/buran/launch', 'ola', { stake: 10 })).status, 409, 'one rocket at a time')
+
+    const taken = await call('POST', `/bet/casino/buran/${flight.id}/takeout`, 'ola')
+    assert.equal(taken.status, 200)
+    const done = taken.data.flight
+    assert.equal(done.status, 'done')
+    if (done.detail.takenAt === null) assert.equal(done.payout, 0, 'blew up first')
+    else {
+      assert.ok(done.detail.takenAt <= done.detail.crash)
+      assert.equal(done.payout, Math.floor((10 * done.detail.takenAt) / 100))
+    }
+    assert.equal(await balance('ola'), before - 10 + done.payout)
+
+    // With a target, it takes out by itself if the rocket gets that far
+    const auto = await call('POST', '/bet/casino/buran/launch', 'ola', { stake: 100, target: 1.5 })
+    const landed = await call('GET', `/bet/casino/buran/${auto.data.flight.id}/landing`, 'ola')
+    const result = landed.data.flight
+    assert.equal(result.status, 'done')
+    if (result.detail.crash > 150) {
+      assert.equal(result.detail.takenAt, 150)
+      assert.equal(result.payout, 150)
+    } else assert.equal(result.payout, 0)
+
+    assert.equal((await call('POST', '/bet/casino/buran/launch', 'ola', { stake: 10, target: 1 })).status, 400)
+    const free = await call('POST', '/bet/casino/buran/try', 'ola')
+    assert.ok(free.data.crash >= 100)
+    const log = await call('GET', '/bet/activity?kind=round', 'kari')
+    assert.ok(log.data.items.length >= 4)
+    assert.ok(log.data.items.every((item: any) => item.kind === 'round'))
+    const page = await call('GET', `/bet/members/${log.data.items[0].member.id}?status=settled`, 'kari')
+    assert.ok(page.data.rounds.length >= 1)
+  })
+})
+
 describe('push notifications', () => {
   // What a browser hands over: an address at its push service and the keys to encrypt for it
   const subscription = (name: string) => ({
@@ -618,6 +726,8 @@ describe('push notifications', () => {
 
   it('tells TebBet members about new markets once in a while, but not ones they are kept out of', async () => {
     const news = (name: string) => pushedTo(name).filter(push => push.tag === 'new-markets')
+    // Let a check go by first, so markets from the tests before are told about already
+    await sleep(1200)
     const before = { dev: news('dev-bet').length, kari: news('kari-bet').length }
     const members = await call('GET', '/bet/members', 'admin')
     const kari = members.data.find((m: any) => m.name === 'Kari Nordmann')
@@ -638,7 +748,7 @@ describe('push notifications', () => {
     const forDev = () => news('dev-bet').slice(before.dev)
     await until(async () => forDev(), list => mentioning(list, 'Vinner Kari') > 0 && mentioning(list, 'over 30') > 0, 5)
     for (const push of forDev()) {
-      assert.match(push.title, /^(Nytt spill|2 nye spill): Fredagsquiz$/)
+      assert.match(push.title, /^(Nytt spill|2 nye spill): Fredagsquiz$/, JSON.stringify(forDev()))
       assert.equal(push.url, `/gruppe/${group.data.id}`)
     }
     const [forKari] = await until(async () => news('kari-bet').slice(before.kari), list => list.length > 0, 5)
