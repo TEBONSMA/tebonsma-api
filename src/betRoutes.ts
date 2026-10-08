@@ -59,6 +59,9 @@ import {
 import { idByName, usernameOf } from './members.ts'
 import { MAX_ODDS, MIN_ODDS, SPREADS, type Spread } from './odds.ts'
 import { INSIDE_TYPES, isInsideBet, ROULETTE_TYPES, type RouletteBet, type RouletteSpot } from './roulette.ts'
+import { currentFlight, launch, playWheel, rounds, roundsOfMember, spinSlot, takeOut, tryFlight, waitForLanding, type WheelBets } from './rounds.ts'
+import { MAX_CRASH } from './crash.ts'
+import { WHEEL_SYMBOLS, type WheelSymbol } from './wheel.ts'
 import { bad, readBody, readText, viewerOf } from './feedRoutes.ts'
 
 const MAX_QUESTION_LENGTH = 140
@@ -304,6 +307,34 @@ function readRouletteBets(body: Record<string, unknown>): RouletteBet[] {
   })
 }
 
+// A stake on one of the casino games: a whole number of coins
+function readStake(raw: unknown) {
+  if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 1 || raw > MAX_STAKE) throw bad('Innsatsen må være et helt antall mynter')
+  return raw
+}
+
+// TEB-hjulet: { jarritos: 20, sommerfest: 5 }, coins on each symbol
+function readWheelBets(raw: unknown): WheelBets {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw bad('Ugyldige innsatser')
+  const entries = Object.entries(raw as Record<string, unknown>)
+  if (entries.length === 0) throw bad('Legg på minst én innsats')
+  const bets: WheelBets = {}
+  for (const [symbol, stake] of entries) {
+    if (!WHEEL_SYMBOLS.includes(symbol as WheelSymbol)) throw bad('Ugyldig felt på hjulet')
+    bets[symbol as WheelSymbol] = readStake(stake)
+  }
+  return bets
+}
+
+// Buran: take out by itself at this multiplier, 1,01 to the most the rocket goes, or not at all
+function readTarget(raw: unknown) {
+  if (raw === undefined || raw === null) return null
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) throw bad('Ugyldig mål')
+  const target = Math.round(raw * 100)
+  if (target < 101 || target > MAX_CRASH * 100) throw bad(`Målet må være mellom 1,01 og ${MAX_CRASH}`)
+  return target
+}
+
 const id = (c: Context) => c.req.param('id') ?? ''
 
 betRoutes.get('/bet/me', async c => c.json(await getAccount(viewerOf(c))))
@@ -429,6 +460,7 @@ betRoutes.post('/bet/flaks/tickets/:id/scratch', async c => {
 // Own roulette spins, and blackjack hands played to the end
 betRoutes.get('/bet/flaks/spins', c => c.json(spins(viewerOf(c))))
 betRoutes.get('/bet/flaks/hands', c => c.json(doneHands(viewerOf(c))))
+betRoutes.get('/bet/flaks/rounds', c => c.json(rounds(viewerOf(c))))
 // Blackjack: the hand being played, if any; a new one ({ bet, trial? }); and the moves on it
 betRoutes.get('/bet/casino/blackjack', c => c.json({ hand: openHand(viewerOf(c)) }))
 betRoutes.post('/bet/casino/blackjack/deal', async c => {
@@ -449,6 +481,40 @@ betRoutes.post('/bet/casino/roulette/spin', async c => {
   const viewer = viewerOf(c)
   const spin = spinRoulette(viewer, readRouletteBets(await readBody(c)))
   return c.json({ ...spin, account: await getAccount(viewer) })
+})
+// Pirotsma: { stake, trial? }. The whole spin comes back as frames to show, free spins included.
+betRoutes.post('/bet/casino/pirotsma/spin', async c => {
+  const body = await readBody(c)
+  const viewer = viewerOf(c)
+  const spin = spinSlot(viewer, readStake(body.stake), body.trial === true)
+  return c.json({ ...spin, account: await getAccount(viewer) })
+})
+// TEB-hjulet: { bets: { symbol: stake }, trial? }
+betRoutes.post('/bet/casino/hjulet/spin', async c => {
+  const body = await readBody(c)
+  const viewer = viewerOf(c)
+  const spin = playWheel(viewer, readWheelBets(body.bets), body.trial === true)
+  return c.json({ ...spin, account: await getAccount(viewer) })
+})
+// Buran: the rocket in the air, if any; launch { stake, target? }; take out; and wait for the
+// landing, which answers when the round is over (at the latest when the rocket blows up)
+betRoutes.get('/bet/casino/buran', c => c.json({ flight: currentFlight(viewerOf(c)) }))
+betRoutes.post('/bet/casino/buran/launch', async c => {
+  const body = await readBody(c)
+  const viewer = viewerOf(c)
+  const flight = launch(viewer, readStake(body.stake), readTarget(body.target))
+  return c.json({ flight, account: await getAccount(viewer) }, 201)
+})
+// A free round: the crash point comes along and the site flies it alone
+betRoutes.post('/bet/casino/buran/try', c => c.json(tryFlight()))
+betRoutes.post('/bet/casino/buran/:id/takeout', async c => {
+  const viewer = viewerOf(c)
+  return c.json({ flight: takeOut(viewer, id(c)), account: await getAccount(viewer) })
+})
+betRoutes.get('/bet/casino/buran/:id/landing', async c => {
+  const viewer = viewerOf(c)
+  const flight = await waitForLanding(viewer, id(c))
+  return c.json({ flight, account: await getAccount(viewer) })
 })
 betRoutes.get('/bet/ledger', c => c.json(listLedger(viewerOf(c))))
 // Everything played and decided on TebBet, the newest first: ?before=<next> for older, ?kind= one
@@ -472,5 +538,6 @@ betRoutes.get('/bet/members/:id', async c => {
     tickets: settled ? doneTicketsOfMember(id(c)) : [],
     spins: settled ? spinsOfMember(id(c)) : [],
     hands: settled ? doneHandsOfMember(id(c)) : [],
+    rounds: settled ? roundsOfMember(id(c)) : [],
   })
 })

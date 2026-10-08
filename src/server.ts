@@ -16,6 +16,7 @@ import { imapBackend } from './mail/imapBackend.ts'
 import { startScheduler } from './mail/scheduled.ts'
 import { memberRoutes } from './memberRoutes.ts'
 import { startNewMarketsCheck } from './newMarkets.ts'
+import { settleLandedRounds } from './rounds.ts'
 import { pushRoutes } from './pushRoutes.ts'
 import { getProfile as readProfile, setAvatar, updateProfile, type ProfileChanges } from './lldap.ts'
 import { rememberProfile } from './members.ts'
@@ -183,3 +184,14 @@ if (!trial) {
 
 // Every hour, a push to TebBet's members about markets that have opened since
 if (!trial) startNewMarketsCheck()
+
+// Buran rockets of members who left the page still blow up, or reach their target
+if (!trial) {
+  setInterval(() => {
+    try {
+      settleLandedRounds()
+    } catch (err) {
+      console.error('could not settle Buran rounds:', err)
+    }
+  }, 30 * 1000)
+}

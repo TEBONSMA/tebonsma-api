@@ -6,15 +6,17 @@ import type { Viewer } from './feed.ts'
 import { spinsBefore } from './flaks.ts'
 import { GAMES, type Field } from './flaksGames.ts'
 import { getMembers } from './members.ts'
+import { roundsBefore } from './rounds.ts'
 
 // Activity: everything that happens on TebBet in one log, the newest first. Every slip played,
-// every market decided or called off, every scratch card scratched to the end, every roulette spin
-// and every blackjack hand played out (free ones left out), a page at a time. Everyone sees the same log; who played what is already shown on each event and group,
+// every market decided or called off, every scratch card scratched to the end, every roulette spin,
+// every blackjack hand played out and every round of Pirotsma, TEB-hjulet and Buran that is over
+// (free ones left out), a page at a time. Everyone sees the same log; who played what is already shown on each event and group,
 // but not the odds on markets the viewer is kept out of.
 
 const PAGE = 50
 
-export const ACTIVITY_KINDS = ['slip', 'result', 'ticket', 'spin', 'hand'] as const
+export const ACTIVITY_KINDS = ['slip', 'result', 'ticket', 'spin', 'hand', 'round'] as const
 export type ActivityKind = (typeof ACTIVITY_KINDS)[number]
 
 interface ResultRow {
@@ -166,6 +168,7 @@ export async function listActivity(viewer: Viewer, before: string | null, kinds:
 
   const spins = kinds.includes('spin') ? spinsBefore(until, PAGE) : []
   const hands = kinds.includes('hand') ? handsBefore(until, PAGE) : []
+  const rounds = kinds.includes('round') ? roundsBefore(until, PAGE) : []
 
   const winners = new Map<string, string[]>()
   if (results.length > 0) {
@@ -187,6 +190,7 @@ export async function listActivity(viewer: Viewer, before: string | null, kinds:
     ...tickets.map(row => row.username),
     ...spins.map(row => row.username),
     ...hands.map(row => row.username),
+    ...rounds.map(row => row.username),
     ...deciders,
     ...bettors,
   ])
@@ -247,10 +251,17 @@ export async function listActivity(viewer: Viewer, before: string | null, kinds:
       member: members.get(username)!,
       hand,
     })),
+    ...rounds.map(({ username, round }) => ({
+      kind: 'round' as const,
+      id: `round:${round.id}`,
+      at: round.doneAt ?? round.createdAt,
+      member: members.get(username)!,
+      round,
+    })),
   ].sort((a, b) => b.at.localeCompare(a.at))
 
   const page = items.slice(0, PAGE)
-  const more = items.length > PAGE || [slips, results, tickets, spins, hands].some(rows => rows.length === PAGE)
+  const more = items.length > PAGE || [slips, results, tickets, spins, hands, rounds].some(rows => rows.length === PAGE)
   // Ask with before = next for the page after this one
   return { items: page, next: more && page.length > 0 ? page[page.length - 1].at : null }
 }
