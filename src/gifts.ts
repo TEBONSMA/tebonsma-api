@@ -45,6 +45,21 @@ export function giftsOf(username: string) {
   return gifts
 }
 
+// Everything the member has had on the house in each game, used up or not: how many plays are
+// left of how many, and at what stake. For their member page.
+export function giftsGiven(username: string) {
+  const rows = db
+    .prepare('SELECT game, stake, plays, used FROM casino_gifts WHERE username = ? ORDER BY created_at')
+    .all(username) as { game: GiftGame; stake: number; plays: number; used: number }[]
+  const gifts: Partial<Record<GiftGame, { left: number; plays: number; stake: number }>> = {}
+  for (const row of rows) {
+    const gift = (gifts[row.game] ??= { left: 0, plays: 0, stake: row.stake })
+    gift.left += row.plays - row.used
+    gift.plays += row.plays
+  }
+  return gifts
+}
+
 // Takes one play on the house of a game, the oldest gift first, and gives its stake. Call inside a
 // transaction with the play.
 export function takeGift(username: string, game: GiftGame) {

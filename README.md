@@ -143,7 +143,7 @@ can get a new closing time.
 | GET | `/bet/ledger` | Own account statement |
 | GET | `/bet/activity` | Everything played and decided on TebBet, the newest first: every slip, every market decided or called off (with everyone who played on it: their pick, odds, whether it came true and what their slip won or lost), every scratch card scratched to the end, every roulette spin, every blackjack hand played out and every round of Sponsorjakten and Fyllekjøring that is over (free ones left out). `?kind=` one or more of `slip`, `result`, `ticket`, `spin`, `hand` and `round`, comma-separated; `?before=` the `next` of the previous page for older |
 | GET | `/bet/leaderboard` | Everyone who has played, by coins in hand plus coins in play. Equal totals share a `rank` (1, 1, 1, 4) |
-| GET | `/bet/members/:id?status=open\|settled` | A member's page: place on the leaderboard, coins and slips (not their account statement), and with `settled` the scratch cards they have finished and their casino games (`spins`, `hands`, `rounds`) |
+| GET | `/bet/members/:id?status=open\|settled` | A member's page: place on the leaderboard, coins and slips (not their account statement), rounds on the house left in each casino game (`gifts`), and with `settled` the scratch cards they have finished and their casino games (`spins`, `hands`, `rounds`) |
 | GET | `/bet/flaks` | The scratch cards (price, prizes and odds, rules) and own tickets not scratched to the end |
 | GET | `/bet/flaks/done` | Own tickets scratched to the end |
 | POST | `/bet/flaks/:game/buy` | Buy a ticket; its outcome is drawn now |

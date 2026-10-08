@@ -676,6 +676,13 @@ describe('more casino', () => {
     for (let i = 0; i < 9; i++) assert.equal((await call('POST', '/bet/casino/sponsorjakten/spin', 'admin', { gift: true })).status, 200)
     assert.equal((await call('POST', '/bet/casino/sponsorjakten/spin', 'admin', { gift: true })).status, 400)
     assert.equal((await call('GET', '/bet/me', 'admin')).data.gifts.sponsorjakten, undefined)
+
+    // Every member can see what is left on the house on the member page
+    const id = (await call('GET', '/members/me', 'admin')).data.member.id
+    assert.deepEqual((await call('GET', `/bet/members/${id}`, 'kari')).data.gifts, {
+      sponsorjakten: { left: 0, plays: 10, stake: 25 },
+      fyllekjoring: { left: 9, plays: 10, stake: 25 },
+    })
   })
 })
 

@@ -2,7 +2,7 @@ import { randomInt, randomUUID } from 'node:crypto'
 import { HTTPException } from 'hono/http-exception'
 import { config } from './config.ts'
 import { afterCommit, db, transaction } from './db.ts'
-import { giftsOf, giveGifts } from './gifts.ts'
+import { giftsGiven, giftsOf, giveGifts } from './gifts.ts'
 import { colorOf, ROULETTE_ODDS, spotLabel, wins, type RouletteSpot } from './roulette.ts'
 import type { Viewer } from './feed.ts'
 import { listGroupMembers } from './lldap.ts'
@@ -1789,5 +1789,7 @@ export async function getMemberPage(viewer: Viewer, id: string, settled: boolean
     won: row?.won ?? 0,
     // Without the odds on markets the viewer is kept out of, unless they are the viewer's own
     slips: slipsOf(username, settled, username === viewer.username ? undefined : hiddenFor(viewer.username)),
+    // Rounds on the house in the casino games, used up or not; none until they have opened TebBet
+    gifts: giftsGiven(username),
   }
 }
