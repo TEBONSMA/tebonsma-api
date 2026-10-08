@@ -58,7 +58,7 @@ import {
 } from './flaks.ts'
 import { idByName, usernameOf } from './members.ts'
 import { MAX_ODDS, MIN_ODDS, SPREADS, type Spread } from './odds.ts'
-import { ROULETTE_TYPES, type RouletteBet, type RouletteSpot } from './roulette.ts'
+import { INSIDE_TYPES, isInsideBet, ROULETTE_TYPES, type RouletteBet, type RouletteSpot } from './roulette.ts'
 import { bad, readBody, readText, viewerOf } from './feedRoutes.ts'
 
 const MAX_QUESTION_LENGTH = 140
@@ -274,10 +274,16 @@ function readSlips(body: Record<string, unknown>): SlipInput[] {
 
 // [{ type, number?, stake }], as the roulette table sends them
 // A place on the roulette table: { type, number? }, the number for straight (0-36), dozen and
-// column (1-3)
+// column (1-3). A place on the lines between the numbers is { type, numbers }.
 function readSpot(raw: unknown): RouletteSpot {
-  const { type, number } = (raw ?? {}) as Record<string, unknown>
+  const { type, number, numbers } = (raw ?? {}) as Record<string, unknown>
   if (typeof type !== 'string' || !ROULETTE_TYPES.includes(type as RouletteSpot['type'])) throw bad('Ugyldig innsats')
+  if (INSIDE_TYPES.includes(type as RouletteSpot['type'])) {
+    if (!Array.isArray(numbers) || !numbers.every(n => Number.isInteger(n))) throw bad('Ugyldige tall')
+    const sorted = (numbers as number[]).toSorted((a, b) => a - b)
+    if (!isInsideBet(type as RouletteSpot['type'], sorted)) throw bad('Det er ikke en plass på bordet')
+    return { type: type as RouletteSpot['type'], numbers: sorted }
+  }
   const highest = type === 'straight' ? 36 : type === 'dozen' || type === 'column' ? 3 : null
   if (highest === null) return { type: type as RouletteSpot['type'] }
   const lowest = type === 'straight' ? 0 : 1

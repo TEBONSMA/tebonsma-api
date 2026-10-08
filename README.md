@@ -149,7 +149,7 @@ can get a new closing time.
 | POST | `/bet/flaks/:game/buy` | Buy a ticket; its outcome is drawn now |
 | POST | `/bet/flaks/:game/try` | A free ticket to try the game, with every field at once; nothing is kept, taken or paid |
 | POST | `/bet/flaks/tickets/:id/scratch` | Scratch `{ field }`, or `{}` for every field left; the last one pays the prize |
-| POST | `/bet/casino/roulette/spin` | Roulette: `{ bets: [{ type, number?, stake }] }`, settled at once |
+| POST | `/bet/casino/roulette/spin` | Roulette: `{ bets: [{ type, number?, numbers?, stake }] }`, settled at once. `numbers` is for the bets on the lines between the numbers: `split`, `street`, `corner` and `line` (see `src/roulette.ts`) |
 | GET | `/bet/flaks/spins` | Own roulette spins |
 | POST | `/bet/casino/roulette/try` | A free spin with the same bets as `/spin`; nothing is kept, taken or paid |
 | GET | `/bet/casino/blackjack` | The blackjack hand being played, if any (`{ hand }`) |

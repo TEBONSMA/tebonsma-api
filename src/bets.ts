@@ -281,6 +281,8 @@ export const DEFAULT_GROUP = 'andre-spill'
 const hasColumn = (table: string, name: string) =>
   (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).some(column => column.name === name)
 if (!hasColumn('bet_sections', 'group_id')) db.exec('ALTER TABLE bet_sections ADD COLUMN group_id TEXT')
+// A roulette pick on the lines between the numbers: the numbers it covers, "17,20"
+if (!hasColumn('bet_roulette_legs', 'numbers')) db.exec('ALTER TABLE bet_roulette_legs ADD COLUMN numbers TEXT')
 if (!hasColumn('bet_markets', 'group_id')) {
   db.exec(`
     ALTER TABLE bet_markets ADD COLUMN group_id TEXT REFERENCES bet_groups (id);
@@ -1510,10 +1512,11 @@ export function placeSlips(viewer: Viewer, slips: SlipInput[]) {
       if (roulette) {
         // The wheel goes now: a miss loses the slip at once
         const landed = randomInt(37)
-        db.prepare('INSERT INTO bet_roulette_legs (slip_id, type, number, odds, landed, won) VALUES (?, ?, ?, ?, ?, ?)').run(
+        db.prepare('INSERT INTO bet_roulette_legs (slip_id, type, number, numbers, odds, landed, won) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
           id,
           roulette.type,
           roulette.number ?? null,
+          roulette.numbers?.join(',') ?? null,
           rouletteOdds,
           landed,
           wins(roulette, landed) ? 1 : 0,
@@ -1574,6 +1577,7 @@ interface RouletteLegRow {
   slip_id: string
   type: RouletteSpot['type']
   number: number | null
+  numbers: string | null
   odds: number
   landed: number
   won: number
@@ -1588,7 +1592,8 @@ function rouletteLegsOf(slipIds: string[]) {
   return new Map(rows.map(row => [row.slip_id, row]))
 }
 
-const rouletteLabel = (leg: RouletteLegRow) => spotLabel({ type: leg.type, number: leg.number ?? undefined })
+const rouletteLabel = (leg: RouletteLegRow) =>
+  spotLabel({ type: leg.type, number: leg.number ?? undefined, numbers: leg.numbers?.split(',').map(Number) })
 
 export function toSlips(rows: SlipRow[], hidden: Set<string> = new Set()) {
   const legs = legsOf(rows.map(row => row.id))
