@@ -141,7 +141,7 @@ can get a new closing time.
 | POST | `/bet/slips` | Play: `{ slips: [{ stake, selections }] }`, all or none. A selection is `{ outcomeId, odds }`, or `{ marketId, side, line, odds }` for over/under. A combination may also hold one place on the roulette table, `{ roulette: { type, number? }, odds }`: the wheel is spun as the slip is played, and a miss loses the slip at once |
 | GET | `/bet/slips?status=open\|settled` | Own slips |
 | GET | `/bet/ledger` | Own account statement |
-| GET | `/bet/activity` | Everything played and decided on TebBet, the newest first: every slip, every market decided or called off (with everyone who played on it: their pick, odds, whether it came true and what their slip won or lost), every scratch card scratched to the end, every roulette spin, every blackjack hand played out and every round of Sponsorjakten, TEB-hjulet and Fyllekjøring that is over (free ones left out). `?kind=` one or more of `slip`, `result`, `ticket`, `spin`, `hand` and `round`, comma-separated; `?before=` the `next` of the previous page for older |
+| GET | `/bet/activity` | Everything played and decided on TebBet, the newest first: every slip, every market decided or called off (with everyone who played on it: their pick, odds, whether it came true and what their slip won or lost), every scratch card scratched to the end, every roulette spin, every blackjack hand played out and every round of Sponsorjakten and Fyllekjøring that is over (free ones left out). `?kind=` one or more of `slip`, `result`, `ticket`, `spin`, `hand` and `round`, comma-separated; `?before=` the `next` of the previous page for older |
 | GET | `/bet/leaderboard` | Everyone who has played, by coins in hand plus coins in play. Equal totals share a `rank` (1, 1, 1, 4) |
 | GET | `/bet/members/:id?status=open\|settled` | A member's page: place on the leaderboard, coins and slips (not their account statement), and with `settled` the scratch cards they have finished and their casino games (`spins`, `hands`, `rounds`) |
 | GET | `/bet/flaks` | The scratch cards (price, prizes and odds, rules) and own tickets not scratched to the end |
@@ -157,13 +157,12 @@ can get a new closing time.
 | POST | `/bet/casino/blackjack/:id/:action` | `hit`, `stand`, `double` or `split` the hand being played |
 | GET | `/bet/flaks/hands` | Own blackjack hands played to the end |
 | POST | `/bet/casino/sponsorjakten/spin` | Sponsorjakten, the collector slot (`src/slot.ts`): `{ stake, trial? }`. The whole spin comes back as `frames` to show, free spins included, with the four members who hunt the sponsors' goods |
-| POST | `/bet/casino/hjulet/spin` | TEB-hjulet, the money wheel (`src/wheel.ts`): `{ bets: { jarritos?, underberg?, nachspiel?, pulebord?, nyttar?, sommerfest? }, trial? }`, coins on each |
 | GET | `/bet/casino/fyllekjoring` | Fyllekjøring, the crash game (`src/crash.ts`): the own car on the road, if any (`{ flight }`) |
 | POST | `/bet/casino/fyllekjoring/launch` | Start: `{ stake, target? }`, where `target` takes out by itself at that multiplier (1.01 to 250). One drive at a time; the crash point stays secret until the round is over. A car that gets all the way (250x) pays that to everyone still in it |
 | POST | `/bet/casino/fyllekjoring/:id/takeout` | Take out at the multiplier the car has reached by the server's clock, if it hasn't crashed |
 | GET | `/bet/casino/fyllekjoring/:id/landing` | Answers when the round is over, at the latest when the car crashes |
 | POST | `/bet/casino/fyllekjoring/try` | A free round: the crash point, for the site to fly alone |
-| GET | `/bet/flaks/rounds` | Own rounds of Sponsorjakten, TEB-hjulet and Fyllekjøring that are over |
+| GET | `/bet/flaks/rounds` | Own rounds of Sponsorjakten and Fyllekjøring that are over |
 
 `kind` is `yesno`, `choice`, `multi` or `overunder`. A multi market also takes `winners`,
 about how many of its outcomes will come true (at least 1, fewer than the outcomes, like

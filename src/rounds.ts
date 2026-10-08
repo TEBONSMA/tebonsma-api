@@ -7,19 +7,18 @@ import type { Viewer } from './feed.ts'
 import { MEMBERS } from './flaksGames.ts'
 import { usernameOf } from './members.ts'
 import { payoutOf, playSlot, type SlotResult } from './slot.ts'
-import { spinWheel, WHEEL_NAMES, WHEEL_ODDS, wheelPayout, type WheelSymbol } from './wheel.ts'
 
-// Three more casino games, kept in one table of rounds: Sponsorjakten (the collector slot in
-// slot.ts), TEB-hjulet (the money wheel in wheel.ts) and Fyllekjøring (the crash game in crash.ts).
-// Coins move through the ledger like the other games of luck. A slot spin or a wheel spin is
-// decided at once; a Fyllekjøring round drives on until the member takes out or the car crashes. Free
+// Two more casino games, kept in one table of rounds: Sponsorjakten (the collector slot in slot.ts)
+// and Fyllekjøring (the crash game in crash.ts). Coins move through the ledger like the other games
+// of luck. A slot spin is decided at once; a Fyllekjøring round drives on until the member jumps off
+// or the car crashes. Free
 // rounds (trial) play the same, but take and pay nothing and aren't kept.
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS flaks_rounds (
     id         TEXT PRIMARY KEY,
     username   TEXT NOT NULL,
-    game       TEXT NOT NULL CHECK (game IN ('sponsorjakten', 'hjulet', 'fyllekjoring')),
+    game       TEXT NOT NULL CHECK (game IN ('sponsorjakten', 'fyllekjoring')),
     stake      INTEGER NOT NULL,
     payout     INTEGER NOT NULL DEFAULT 0,
     status     TEXT NOT NULL DEFAULT 'done' CHECK (status IN ('playing', 'done')),
@@ -35,7 +34,7 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS flaks_rounds_done ON flaks_rounds (status, done_at);
 `)
 
-export const ROUND_GAMES = { sponsorjakten: 'Sponsorjakten', hjulet: 'TEB-hjulet', fyllekjoring: 'Fyllekjøring' } as const
+export const ROUND_GAMES = { sponsorjakten: 'Sponsorjakten', fyllekjoring: 'Fyllekjøring' } as const
 export type RoundGame = keyof typeof ROUND_GAMES
 
 const DONE_SHOWN = 100
@@ -122,42 +121,6 @@ export function spinSlot(viewer: Viewer, stake: number, trial: boolean) {
     return { frames: result.frames, members, payout, round: toRound(row) }
   })
 }
-
-// --- TEB-hjulet
-
-export type WheelBets = Partial<Record<WheelSymbol, number>>
-
-export function playWheel(viewer: Viewer, bets: WheelBets, trial: boolean) {
-  const outcome = spinWheel(randomInt)
-  const stake = Object.values(bets).reduce((sum, n) => sum + (n ?? 0), 0)
-  const payout = Object.entries(bets).reduce((sum, [symbol, n]) => sum + wheelPayout(symbol as WheelSymbol, n ?? 0, outcome), 0)
-  const detail = { bets, stops: outcome.stops, symbol: outcome.symbol, multiplier: outcome.multiplier }
-  if (trial) return { ...detail, stake, payout, round: null }
-  return transaction(() => {
-    ensureCoins(viewer, stake)
-    addCasinoRow(viewer.username, -stake, ROUND_GAMES.hjulet, `${Object.keys(bets).length} ${Object.keys(bets).length === 1 ? 'innsats' : 'innsatser'}`)
-    if (payout > 0) {
-      addCasinoRow(viewer.username, payout, ROUND_GAMES.hjulet, `Hjulet stoppet på ${WHEEL_NAMES[outcome.symbol]}${outcome.multiplier > 1 ? `, ${outcome.multiplier}x` : ''}`)
-    }
-    const row: RoundRow = {
-      id: randomUUID(),
-      username: viewer.username,
-      game: 'hjulet',
-      stake,
-      payout,
-      status: 'done',
-      detail: JSON.stringify(detail),
-      crash: null,
-      target: null,
-      created_at: now(),
-      done_at: now(),
-    }
-    insertRound(row)
-    return { ...detail, stake, payout, round: toRound(row) }
-  })
-}
-
-export const wheelOdds = () => WHEEL_ODDS
 
 // --- Fyllekjøring
 

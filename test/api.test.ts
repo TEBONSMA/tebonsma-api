@@ -598,21 +598,6 @@ describe('more casino', () => {
     assert.equal((await call('POST', '/bet/casino/sponsorjakten/spin', 'kari', { stake: 0 })).status, 400)
   })
 
-  it('spins TEB-hjulet and pays the symbol it stops on', async () => {
-    const odds: Record<string, number> = { jarritos: 1.88, underberg: 2.88, nachspiel: 6.17, pulebord: 10.8, nyttar: 21.6, sommerfest: 43.2 }
-    const before = await balance('kari')
-    const bets = { jarritos: 20, sommerfest: 5 }
-    const spin = await call('POST', '/bet/casino/hjulet/spin', 'kari', { bets })
-    assert.equal(spin.status, 200, JSON.stringify(spin.data))
-    const { symbol, multiplier, stops } = spin.data
-    assert.ok(stops.length >= 1)
-    const expected = symbol in bets ? Math.floor((bets as any)[symbol] * odds[symbol] * multiplier) : 0
-    assert.equal(spin.data.payout, expected)
-    assert.equal(await balance('kari'), before - 25 + expected)
-    assert.equal((await call('POST', '/bet/casino/hjulet/spin', 'kari', { bets: { bergen: 10 } })).status, 400)
-    assert.equal((await call('POST', '/bet/casino/hjulet/spin', 'kari', { bets: {} })).status, 400)
-  })
-
   it('drives Fyllekjøring until the member takes out or the car crashes', async () => {
     const before = await balance('ola')
     const launched = await call('POST', '/bet/casino/fyllekjoring/launch', 'ola', { stake: 10 })
@@ -648,7 +633,8 @@ describe('more casino', () => {
     const free = await call('POST', '/bet/casino/fyllekjoring/try', 'ola')
     assert.ok(free.data.crash >= 100)
     const log = await call('GET', '/bet/activity?kind=round', 'kari')
-    assert.ok(log.data.items.length >= 4)
+    // A Sponsorjakten spin and two drives, at least
+    assert.ok(log.data.items.length >= 3)
     assert.ok(log.data.items.every((item: any) => item.kind === 'round'))
     const page = await call('GET', `/bet/members/${log.data.items[0].member.id}?status=settled`, 'kari')
     assert.ok(page.data.rounds.length >= 1)

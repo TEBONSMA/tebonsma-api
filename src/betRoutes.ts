@@ -59,9 +59,8 @@ import {
 import { idByName, usernameOf } from './members.ts'
 import { MAX_ODDS, MIN_ODDS, SPREADS, type Spread } from './odds.ts'
 import { INSIDE_TYPES, isInsideBet, ROULETTE_TYPES, type RouletteBet, type RouletteSpot } from './roulette.ts'
-import { currentFlight, launch, playWheel, rounds, roundsOfMember, spinSlot, takeOut, tryFlight, waitForLanding, type WheelBets } from './rounds.ts'
+import { currentFlight, launch, rounds, roundsOfMember, spinSlot, takeOut, tryFlight, waitForLanding } from './rounds.ts'
 import { MAX_CRASH } from './crash.ts'
-import { WHEEL_SYMBOLS, type WheelSymbol } from './wheel.ts'
 import { bad, readBody, readText, viewerOf } from './feedRoutes.ts'
 
 const MAX_QUESTION_LENGTH = 140
@@ -313,19 +312,6 @@ function readStake(raw: unknown) {
   return raw
 }
 
-// TEB-hjulet: { jarritos: 20, sommerfest: 5 }, coins on each symbol
-function readWheelBets(raw: unknown): WheelBets {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw bad('Ugyldige innsatser')
-  const entries = Object.entries(raw as Record<string, unknown>)
-  if (entries.length === 0) throw bad('Legg på minst én innsats')
-  const bets: WheelBets = {}
-  for (const [symbol, stake] of entries) {
-    if (!WHEEL_SYMBOLS.includes(symbol as WheelSymbol)) throw bad('Ugyldig felt på hjulet')
-    bets[symbol as WheelSymbol] = readStake(stake)
-  }
-  return bets
-}
-
 // Fyllekjøring: take out by itself at this multiplier, 1,01 to the furthest the car goes, or not at all
 function readTarget(raw: unknown) {
   if (raw === undefined || raw === null) return null
@@ -488,13 +474,6 @@ betRoutes.post('/bet/casino/sponsorjakten/spin', async c => {
   const body = await readBody(c)
   const viewer = viewerOf(c)
   const spin = spinSlot(viewer, readStake(body.stake), body.trial === true)
-  return c.json({ ...spin, account: await getAccount(viewer) })
-})
-// TEB-hjulet: { bets: { symbol: stake }, trial? }
-betRoutes.post('/bet/casino/hjulet/spin', async c => {
-  const body = await readBody(c)
-  const viewer = viewerOf(c)
-  const spin = playWheel(viewer, readWheelBets(body.bets), body.trial === true)
   return c.json({ ...spin, account: await getAccount(viewer) })
 })
 // Fyllekjøring: the own car on the road, if any; start { stake, target? };
