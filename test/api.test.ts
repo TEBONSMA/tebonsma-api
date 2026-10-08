@@ -69,6 +69,8 @@ before(async () => {
       SITE_URL: ORIGIN,
       BOTS: 'off',
       NEW_MARKETS_CHECK_SECONDS: '1',
+      // Fyllekjøring's multiplier climbs 50 times as fast: 250x in about a second
+      CRASH_SPEED: '50',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
@@ -518,6 +520,174 @@ describe('TebBet', () => {
     assert.equal((await call('GET', '/bet/me', 'ola')).data.balance, before, 'no coins move')
     assert.equal((await call('GET', '/bet/flaks/spins', 'ola')).data.length, 0, 'nothing is kept')
   })
+
+  it('takes roulette bets on the lines between the numbers', async () => {
+    const odds: Record<string, number> = { split: 18, street: 12, corner: 9, line: 6 }
+    const bets = [
+      { type: 'split', numbers: [20, 17], stake: 10 },
+      { type: 'street', numbers: [13, 14, 15], stake: 10 },
+      { type: 'corner', numbers: [0, 1, 2, 3], stake: 10 },
+      { type: 'line', numbers: [31, 32, 33, 34, 35, 36], stake: 10 },
+    ]
+    for (let i = 0; i < 15; i++) {
+      const spin = await call('POST', '/bet/casino/roulette/try', 'ola', { bets })
+      assert.equal(spin.status, 200, JSON.stringify(spin.data))
+      assert.deepEqual(spin.data.bets[0].numbers, [17, 20], 'the numbers lowest first')
+      for (const bet of spin.data.bets) {
+        const won = bet.numbers.includes(spin.data.number)
+        assert.equal(bet.won, won)
+        assert.equal(bet.payout, won ? bet.stake * odds[bet.type] : 0)
+      }
+    }
+    const refused = async (bet: object) => (await call('POST', '/bet/casino/roulette/try', 'ola', { bets: [{ ...bet, stake: 10 }] })).status
+    assert.equal(await refused({ type: 'split', numbers: [17, 19] }), 400, 'not side by side')
+    assert.equal(await refused({ type: 'split', numbers: [3, 4] }), 400, 'not across the end of a row')
+    assert.equal(await refused({ type: 'corner', numbers: [1, 2, 3, 4] }), 400)
+    assert.equal(await refused({ type: 'street', numbers: [2, 3, 4] }), 400)
+    assert.equal(await refused({ type: 'line', numbers: [34, 35, 36] }), 400)
+    assert.equal(await refused({ type: 'split' }), 400)
+  })
+})
+
+describe('more casino', () => {
+  const balance = async (user: string) => (await call('GET', '/bet/me', user)).data.balance as number
+
+  it('spins Sponsorjakten, with frames that add up to the win', async () => {
+    const before = await balance('kari')
+    const spin = await call('POST', '/bet/casino/sponsorjakten/spin', 'kari', { stake: 20 })
+    assert.equal(spin.status, 200, JSON.stringify(spin.data))
+    assert.equal(spin.data.members.length, 4)
+    assert.equal(await balance('kari'), before - 20 + spin.data.payout)
+
+    // Play the frames back: every step is a collector taking the piece next to it
+    let pieces = new Map<number, any>()
+    let collectors: any[] = []
+    let won = 0
+    for (const frame of spin.data.frames) {
+      if (frame.type === 'fill') {
+        pieces = new Map(frame.pieces.map((p: any) => [p.id, p]))
+        collectors = frame.collectors.map((c: any) => ({ ...c }))
+        assert.equal(pieces.size + collectors.length, 36, 'a full grid')
+      } else if (frame.type === 'step') {
+        const piece = pieces.get(frame.piece)
+        const collector = collectors.find(c => c.color === frame.color)
+        assert.ok(piece, 'the piece is on the grid')
+        assert.equal(Math.abs(piece.row - collector.row) + Math.abs(piece.col - collector.col), 1, 'next to the collector')
+        assert.ok(piece.kind !== 'gem' || piece.color === frame.color, 'a gem of its own colour')
+        pieces.delete(frame.piece)
+        collector.row = piece.row
+        collector.col = piece.col
+        won += frame.win
+      } else if (frame.type === 'fall') {
+        for (const move of frame.moved) {
+          if (move.piece !== undefined) Object.assign(pieces.get(move.piece), { row: move.row, col: move.col })
+          else Object.assign(collectors.find(c => c.color === move.collector), { row: move.row, col: move.col })
+        }
+        for (const piece of frame.added) pieces.set(piece.id, piece)
+        assert.equal(pieces.size + collectors.length, 36, 'full again after the fall')
+      }
+    }
+    assert.equal(spin.data.payout, Math.floor((20 * Math.min(won, 500_000)) / 100))
+
+    const free = await call('POST', '/bet/casino/sponsorjakten/spin', 'kari', { stake: 20, trial: true })
+    assert.equal(free.status, 200)
+    assert.equal(free.data.round, null)
+    assert.equal(await balance('kari'), before - 20 + spin.data.payout, 'a free spin moves nothing')
+    const mine = await call('GET', '/bet/flaks/rounds', 'kari')
+    assert.equal(mine.data.length, 1, 'only the real spin is kept')
+    assert.equal((await call('POST', '/bet/casino/sponsorjakten/spin', 'kari', { stake: 0 })).status, 400)
+  })
+
+  it('drives Fyllekjøring until the member takes out or the car crashes', async () => {
+    // A car can crash near the start, before it can be looked at (it climbs 50 times as fast here,
+    // and how far it gets before the next call depends on the machine): then it drives again, once
+    // that one, and any second drive that got going, is over
+    let before = 0
+    let flight
+    for (let tries = 0; ; tries++) {
+      assert.ok(tries < 10, 'cars that keep crashing at once')
+      before = await balance('ola')
+      const launched = await call('POST', '/bet/casino/fyllekjoring/launch', 'ola', { stake: 10 })
+      assert.equal(launched.status, 201, JSON.stringify(launched.data))
+      flight = launched.data.flight
+      assert.equal(flight.status, 'playing')
+      assert.ok(!('crash' in flight.detail), 'the crash point is secret while it flies')
+      const current = (await call('GET', '/bet/casino/fyllekjoring', 'ola')).data.flight
+      const again = await call('POST', '/bet/casino/fyllekjoring/launch', 'ola', { stake: 10 })
+      // One drive at a time
+      if (current?.id === flight.id && again.status === 409) break
+      // Over before anyone took out: it crashed, and paid nothing
+      const over = (await call('GET', `/bet/casino/fyllekjoring/${flight.id}/landing`, 'ola')).data.flight
+      assert.equal(over.status, 'done')
+      assert.equal(over.detail.takenAt, null)
+      assert.equal(over.payout, 0)
+      if (again.status === 201) await call('GET', `/bet/casino/fyllekjoring/${again.data.flight.id}/landing`, 'ola')
+    }
+
+    const taken = await call('POST', `/bet/casino/fyllekjoring/${flight.id}/takeout`, 'ola')
+    assert.equal(taken.status, 200)
+    const done = taken.data.flight
+    assert.equal(done.status, 'done')
+    if (done.detail.takenAt === null) assert.equal(done.payout, 0, 'blew up first')
+    else {
+      assert.ok(done.detail.takenAt <= done.detail.crash)
+      assert.equal(done.payout, Math.floor((10 * done.detail.takenAt) / 100))
+    }
+    assert.equal(await balance('ola'), before - 10 + done.payout)
+
+    // With a target, it takes out by itself if the car gets that far
+    const auto = await call('POST', '/bet/casino/fyllekjoring/launch', 'ola', { stake: 100, target: 1.5 })
+    const landed = await call('GET', `/bet/casino/fyllekjoring/${auto.data.flight.id}/landing`, 'ola')
+    const result = landed.data.flight
+    assert.equal(result.status, 'done')
+    if (result.detail.crash > 150) {
+      assert.equal(result.detail.takenAt, 150)
+      assert.equal(result.payout, 150)
+    } else assert.equal(result.payout, 0)
+
+    assert.equal((await call('POST', '/bet/casino/fyllekjoring/launch', 'ola', { stake: 10, target: 1 })).status, 400)
+    const free = await call('POST', '/bet/casino/fyllekjoring/try', 'ola')
+    assert.ok(free.data.crash >= 100)
+    const log = await call('GET', '/bet/activity?kind=round', 'kari')
+    // A Sponsorjakten spin and two drives, at least
+    assert.ok(log.data.items.length >= 3)
+    assert.ok(log.data.items.every((item: any) => item.kind === 'round'))
+    const page = await call('GET', `/bet/members/${log.data.items[0].member.id}?status=settled`, 'kari')
+    assert.ok(page.data.rounds.length >= 1)
+  })
+
+  it('gives every member ten rounds on the house in each game, played without coins', async () => {
+    const me = (await call('GET', '/bet/me', 'admin')).data
+    assert.deepEqual(me.gifts, { sponsorjakten: { left: 10, stake: 25 }, fyllekjoring: { left: 10, stake: 25 } })
+
+    const spin = await call('POST', '/bet/casino/sponsorjakten/spin', 'admin', { gift: true })
+    assert.equal(spin.status, 200, JSON.stringify(spin.data))
+    assert.equal(spin.data.round.stake, 25)
+    assert.equal(spin.data.round.detail.gift, true)
+    assert.equal(spin.data.account.balance, me.balance + spin.data.payout, 'nothing taken, the win paid')
+    assert.equal(spin.data.account.gifts.sponsorjakten.left, 9)
+
+    const drive = await call('POST', '/bet/casino/fyllekjoring/launch', 'admin', { gift: true })
+    assert.equal(drive.status, 201, JSON.stringify(drive.data))
+    assert.equal(drive.data.flight.stake, 25)
+    assert.equal(drive.data.account.gifts.fyllekjoring.left, 9)
+    assert.equal(drive.data.account.balance, me.balance + spin.data.payout)
+    const landed = (await call('GET', `/bet/casino/fyllekjoring/${drive.data.flight.id}/landing`, 'admin')).data.flight
+    assert.equal(landed.detail.gift, true)
+    assert.equal(await balance('admin'), me.balance + spin.data.payout + landed.payout)
+
+    // Once they are used, there are no more
+    for (let i = 0; i < 9; i++) assert.equal((await call('POST', '/bet/casino/sponsorjakten/spin', 'admin', { gift: true })).status, 200)
+    assert.equal((await call('POST', '/bet/casino/sponsorjakten/spin', 'admin', { gift: true })).status, 400)
+    assert.equal((await call('GET', '/bet/me', 'admin')).data.gifts.sponsorjakten, undefined)
+
+    // Every member can see what is left on the house on the member page
+    const id = (await call('GET', '/members/me', 'admin')).data.member.id
+    assert.deepEqual((await call('GET', `/bet/members/${id}`, 'kari')).data.gifts, {
+      sponsorjakten: { left: 0, plays: 10, stake: 25 },
+      fyllekjoring: { left: 9, plays: 10, stake: 25 },
+    })
+  })
 })
 
 describe('push notifications', () => {
@@ -591,6 +761,8 @@ describe('push notifications', () => {
 
   it('tells TebBet members about new markets once in a while, but not ones they are kept out of', async () => {
     const news = (name: string) => pushedTo(name).filter(push => push.tag === 'new-markets')
+    // Let a check go by first, so markets from the tests before are told about already
+    await sleep(1200)
     const before = { dev: news('dev-bet').length, kari: news('kari-bet').length }
     const members = await call('GET', '/bet/members', 'admin')
     const kari = members.data.find((m: any) => m.name === 'Kari Nordmann')
@@ -611,7 +783,7 @@ describe('push notifications', () => {
     const forDev = () => news('dev-bet').slice(before.dev)
     await until(async () => forDev(), list => mentioning(list, 'Vinner Kari') > 0 && mentioning(list, 'over 30') > 0, 5)
     for (const push of forDev()) {
-      assert.match(push.title, /^(Nytt spill|2 nye spill): Fredagsquiz$/)
+      assert.match(push.title, /^(Nytt spill|2 nye spill): Fredagsquiz$/, JSON.stringify(forDev()))
       assert.equal(push.url, `/gruppe/${group.data.id}`)
     }
     const [forKari] = await until(async () => news('kari-bet').slice(before.kari), list => list.length > 0, 5)

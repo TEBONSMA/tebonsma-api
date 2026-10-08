@@ -15,7 +15,9 @@ import { hasBackend, useBackend } from './mail/backend.ts'
 import { imapBackend } from './mail/imapBackend.ts'
 import { startScheduler } from './mail/scheduled.ts'
 import { memberRoutes } from './memberRoutes.ts'
+import { announceLaunch } from './gifts.ts'
 import { startNewMarketsCheck } from './newMarkets.ts'
+import { settleLandedRounds } from './rounds.ts'
 import { pushRoutes } from './pushRoutes.ts'
 import { getProfile as readProfile, setAvatar, updateProfile, type ProfileChanges } from './lldap.ts'
 import { rememberProfile } from './members.ts'
@@ -183,3 +185,17 @@ if (!trial) {
 
 // Every hour, a push to TebBet's members about markets that have opened since
 if (!trial) startNewMarketsCheck()
+
+// Once, when Sponsorjakten and Fyllekjøring come out: a push about them and the rounds on the house
+if (!trial) announceLaunch()
+
+// Fyllekjøring cars of members who left the page still crash, or reach their target
+if (!trial) {
+  setInterval(() => {
+    try {
+      settleLandedRounds()
+    } catch (err) {
+      console.error('could not settle Fyllekjøring rounds:', err)
+    }
+  }, 30 * 1000)
+}

@@ -2,6 +2,7 @@ import { randomInt, randomUUID } from 'node:crypto'
 import { HTTPException } from 'hono/http-exception'
 import { config } from './config.ts'
 import { afterCommit, db, transaction } from './db.ts'
+import { giftsGiven, giftsOf, giveGifts } from './gifts.ts'
 import { colorOf, ROULETTE_ODDS, spotLabel, wins, type RouletteSpot } from './roulette.ts'
 import type { Viewer } from './feed.ts'
 import { listGroupMembers } from './lldap.ts'
@@ -281,6 +282,8 @@ export const DEFAULT_GROUP = 'andre-spill'
 const hasColumn = (table: string, name: string) =>
   (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).some(column => column.name === name)
 if (!hasColumn('bet_sections', 'group_id')) db.exec('ALTER TABLE bet_sections ADD COLUMN group_id TEXT')
+// A roulette pick on the lines between the numbers: the numbers it covers, "17,20"
+if (!hasColumn('bet_roulette_legs', 'numbers')) db.exec('ALTER TABLE bet_roulette_legs ADD COLUMN numbers TEXT')
 if (!hasColumn('bet_markets', 'group_id')) {
   db.exec(`
     ALTER TABLE bet_markets ADD COLUMN group_id TEXT REFERENCES bet_groups (id);
@@ -361,6 +364,7 @@ export function ensureAccount(username: string) {
         "INSERT OR IGNORE INTO bet_ledger (id, username, amount, kind, period, created_at) VALUES (?, ?, ?, 'allowance', ?, ?)",
       ).run(randomUUID(), username, WEEKLY_ALLOWANCE, monday, now())
     }
+    giveGifts(username)
   })
 }
 
@@ -398,6 +402,8 @@ export async function getAccount(viewer: Viewer) {
     inPlay: inPlayOf(viewer.username),
     weeklyAllowance: WEEKLY_ALLOWANCE,
     nextAllowance: mondaysBetween(today, dateOf(dayNumber(today) + 7))[0],
+    // Rounds on the house left in the casino games
+    gifts: giftsOf(viewer.username),
   }
 }
 
@@ -1510,10 +1516,11 @@ export function placeSlips(viewer: Viewer, slips: SlipInput[]) {
       if (roulette) {
         // The wheel goes now: a miss loses the slip at once
         const landed = randomInt(37)
-        db.prepare('INSERT INTO bet_roulette_legs (slip_id, type, number, odds, landed, won) VALUES (?, ?, ?, ?, ?, ?)').run(
+        db.prepare('INSERT INTO bet_roulette_legs (slip_id, type, number, numbers, odds, landed, won) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
           id,
           roulette.type,
           roulette.number ?? null,
+          roulette.numbers?.join(',') ?? null,
           rouletteOdds,
           landed,
           wins(roulette, landed) ? 1 : 0,
@@ -1574,6 +1581,7 @@ interface RouletteLegRow {
   slip_id: string
   type: RouletteSpot['type']
   number: number | null
+  numbers: string | null
   odds: number
   landed: number
   won: number
@@ -1588,7 +1596,8 @@ function rouletteLegsOf(slipIds: string[]) {
   return new Map(rows.map(row => [row.slip_id, row]))
 }
 
-const rouletteLabel = (leg: RouletteLegRow) => spotLabel({ type: leg.type, number: leg.number ?? undefined })
+const rouletteLabel = (leg: RouletteLegRow) =>
+  spotLabel({ type: leg.type, number: leg.number ?? undefined, numbers: leg.numbers?.split(',').map(Number) })
 
 export function toSlips(rows: SlipRow[], hidden: Set<string> = new Set()) {
   const legs = legsOf(rows.map(row => row.id))
@@ -1780,5 +1789,7 @@ export async function getMemberPage(viewer: Viewer, id: string, settled: boolean
     won: row?.won ?? 0,
     // Without the odds on markets the viewer is kept out of, unless they are the viewer's own
     slips: slipsOf(username, settled, username === viewer.username ? undefined : hiddenFor(viewer.username)),
+    // Rounds on the house in the casino games, used up or not; none until they have opened TebBet
+    gifts: giftsGiven(username),
   }
 }

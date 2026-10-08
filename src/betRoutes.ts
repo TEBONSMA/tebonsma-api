@@ -58,7 +58,9 @@ import {
 } from './flaks.ts'
 import { idByName, usernameOf } from './members.ts'
 import { MAX_ODDS, MIN_ODDS, SPREADS, type Spread } from './odds.ts'
-import { ROULETTE_TYPES, type RouletteBet, type RouletteSpot } from './roulette.ts'
+import { INSIDE_TYPES, isInsideBet, ROULETTE_TYPES, type RouletteBet, type RouletteSpot } from './roulette.ts'
+import { currentFlight, launch, rounds, roundsOfMember, spinSlot, takeOut, tryFlight, waitForLanding } from './rounds.ts'
+import { MAX_CRASH } from './crash.ts'
 import { bad, readBody, readText, viewerOf } from './feedRoutes.ts'
 
 const MAX_QUESTION_LENGTH = 140
@@ -274,10 +276,16 @@ function readSlips(body: Record<string, unknown>): SlipInput[] {
 
 // [{ type, number?, stake }], as the roulette table sends them
 // A place on the roulette table: { type, number? }, the number for straight (0-36), dozen and
-// column (1-3)
+// column (1-3). A place on the lines between the numbers is { type, numbers }.
 function readSpot(raw: unknown): RouletteSpot {
-  const { type, number } = (raw ?? {}) as Record<string, unknown>
+  const { type, number, numbers } = (raw ?? {}) as Record<string, unknown>
   if (typeof type !== 'string' || !ROULETTE_TYPES.includes(type as RouletteSpot['type'])) throw bad('Ugyldig innsats')
+  if (INSIDE_TYPES.includes(type as RouletteSpot['type'])) {
+    if (!Array.isArray(numbers) || !numbers.every(n => Number.isInteger(n))) throw bad('Ugyldige tall')
+    const sorted = (numbers as number[]).toSorted((a, b) => a - b)
+    if (!isInsideBet(type as RouletteSpot['type'], sorted)) throw bad('Det er ikke en plass på bordet')
+    return { type: type as RouletteSpot['type'], numbers: sorted }
+  }
   const highest = type === 'straight' ? 36 : type === 'dozen' || type === 'column' ? 3 : null
   if (highest === null) return { type: type as RouletteSpot['type'] }
   const lowest = type === 'straight' ? 0 : 1
@@ -296,6 +304,21 @@ function readRouletteBets(body: Record<string, unknown>): RouletteBet[] {
     }
     return { ...readSpot(raw), stake }
   })
+}
+
+// A stake on one of the casino games: a whole number of coins
+function readStake(raw: unknown) {
+  if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 1 || raw > MAX_STAKE) throw bad('Innsatsen må være et helt antall mynter')
+  return raw
+}
+
+// Fyllekjøring: take out by itself at this multiplier, 1,01 to the furthest the car goes, or not at all
+function readTarget(raw: unknown) {
+  if (raw === undefined || raw === null) return null
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) throw bad('Ugyldig mål')
+  const target = Math.round(raw * 100)
+  if (target < 101 || target > MAX_CRASH * 100) throw bad(`Målet må være mellom 1,01 og ${MAX_CRASH}`)
+  return target
 }
 
 const id = (c: Context) => c.req.param('id') ?? ''
@@ -423,6 +446,7 @@ betRoutes.post('/bet/flaks/tickets/:id/scratch', async c => {
 // Own roulette spins, and blackjack hands played to the end
 betRoutes.get('/bet/flaks/spins', c => c.json(spins(viewerOf(c))))
 betRoutes.get('/bet/flaks/hands', c => c.json(doneHands(viewerOf(c))))
+betRoutes.get('/bet/flaks/rounds', c => c.json(rounds(viewerOf(c))))
 // Blackjack: the hand being played, if any; a new one ({ bet, trial? }); and the moves on it
 betRoutes.get('/bet/casino/blackjack', c => c.json({ hand: openHand(viewerOf(c)) }))
 betRoutes.post('/bet/casino/blackjack/deal', async c => {
@@ -443,6 +467,38 @@ betRoutes.post('/bet/casino/roulette/spin', async c => {
   const viewer = viewerOf(c)
   const spin = spinRoulette(viewer, readRouletteBets(await readBody(c)))
   return c.json({ ...spin, account: await getAccount(viewer) })
+})
+// Sponsorjakten: { stake, trial? } or { gift: true } for a spin on the house. The whole spin comes
+// back as frames to show, free spins included.
+betRoutes.post('/bet/casino/sponsorjakten/spin', async c => {
+  const body = await readBody(c)
+  const viewer = viewerOf(c)
+  const gift = body.gift === true && body.trial !== true
+  const spin = spinSlot(viewer, gift ? 0 : readStake(body.stake), body.trial === true, gift)
+  return c.json({ ...spin, account: await getAccount(viewer) })
+})
+// Fyllekjøring: the own car on the road, if any; start { stake, target? } or { gift: true, target? }
+// for a drive on the house;
+// take out; and wait for the landing, which answers when the round is over (at the latest when
+// the car crashes)
+betRoutes.get('/bet/casino/fyllekjoring', c => c.json({ flight: currentFlight(viewerOf(c)) }))
+betRoutes.post('/bet/casino/fyllekjoring/launch', async c => {
+  const body = await readBody(c)
+  const viewer = viewerOf(c)
+  const gift = body.gift === true
+  const flight = launch(viewer, gift ? 0 : readStake(body.stake), readTarget(body.target), gift)
+  return c.json({ flight, account: await getAccount(viewer) }, 201)
+})
+// A free round: the crash point comes along and the site flies it alone
+betRoutes.post('/bet/casino/fyllekjoring/try', c => c.json(tryFlight()))
+betRoutes.post('/bet/casino/fyllekjoring/:id/takeout', async c => {
+  const viewer = viewerOf(c)
+  return c.json({ flight: takeOut(viewer, id(c)), account: await getAccount(viewer) })
+})
+betRoutes.get('/bet/casino/fyllekjoring/:id/landing', async c => {
+  const viewer = viewerOf(c)
+  const flight = await waitForLanding(viewer, id(c))
+  return c.json({ flight, account: await getAccount(viewer) })
 })
 betRoutes.get('/bet/ledger', c => c.json(listLedger(viewerOf(c))))
 // Everything played and decided on TebBet, the newest first: ?before=<next> for older, ?kind= one
@@ -466,5 +522,6 @@ betRoutes.get('/bet/members/:id', async c => {
     tickets: settled ? doneTicketsOfMember(id(c)) : [],
     spins: settled ? spinsOfMember(id(c)) : [],
     hands: settled ? doneHandsOfMember(id(c)) : [],
+    rounds: settled ? roundsOfMember(id(c)) : [],
   })
 })
