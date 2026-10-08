@@ -120,6 +120,15 @@ describe('feed', () => {
     assert.equal((await call('GET', `/feed/posts/${made.data.id}`, null)).status, 401)
   })
 
+  it('searches posts without caring about case, and hides closed ones from visitors', async () => {
+    const found = await call('GET', '/feed/posts?q=HEI%20al', 'kari')
+    assert.equal(found.data.posts.length, 1)
+    assert.equal((await call('GET', '/feed/posts?q=finnesikke', 'kari')).data.posts.length, 0)
+    assert.equal((await call('GET', '/feed/posts?q=hei', null)).data.posts.length, 0)
+    // % and _ are plain characters, not wildcards
+    assert.equal((await call('GET', '/feed/posts?q=%25', 'kari')).data.posts.length, 0)
+  })
+
   it('takes comments and sends the author a notification', async () => {
     const post = (await call('GET', '/feed/posts', 'kari')).data.posts[0]
     const comment = await call('POST', `/feed/posts/${post.id}/comments`, 'kari', { body: 'Hei!', parentId: null, attachmentIds: [] })

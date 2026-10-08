@@ -167,12 +167,15 @@ for (const path of ['/feed/posts', '/feed/posts/*', '/feed/comments/*', '/notifi
 
 // --- Posts ---
 
+const MAX_SEARCH_LENGTH = 100
+
 feedRoutes.get('/feed/posts', async c => {
   const sort = c.req.query('sort') ?? 'new'
   if (!Object.hasOwn(SORTS, sort)) throw bad('Ukjent sortering')
   const offset = Math.max(0, Math.trunc(Number(c.req.query('offset') ?? 0)) || 0)
   const limit = Math.min(MAX_PAGE_SIZE, Math.max(1, Math.trunc(Number(c.req.query('limit') ?? PAGE_SIZE)) || PAGE_SIZE))
-  return c.json(await listPosts(await visitorOf(c), sort as Sort, offset, limit))
+  const search = (c.req.query('q') ?? '').slice(0, MAX_SEARCH_LENGTH)
+  return c.json(await listPosts(await visitorOf(c), sort as Sort, offset, limit, search))
 })
 
 feedRoutes.get('/feed/posts/:id', async c => c.json(await getPost(await visitorOf(c), c.req.param('id'))))

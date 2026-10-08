@@ -267,15 +267,22 @@ export async function getPost(viewer: Viewer | null, id: string) {
   return (await toPosts([findPost(viewer, id)], viewer))[0]
 }
 
-export async function listPosts(viewer: Viewer | null, sort: Sort, offset: number, limit: number) {
+// A search word matches anywhere in the text, with % and _ taken literally
+const likePattern = (search: string) => `%${search.replace(/[\\%_]/g, '\\$&')}%`
+
+export async function listPosts(viewer: Viewer | null, sort: Sort, offset: number, limit: number, search = '') {
   // Pinned posts come first whatever the order is. One row more than asked for tells
-  // whether there is another page.
+  // whether there is another page. A search looks in the text, and in the title and
+  // place of an event.
+  const pattern = likePattern(search.trim())
   const rows = db
     .prepare(
-      `${POST_SELECT} WHERE (? = 1 OR p.visibility = 'public')
+      `${POST_SELECT} LEFT JOIN events e ON e.post_id = p.id
+       WHERE (? = 1 OR p.visibility = 'public')
+         AND (? = '%%' OR p.body LIKE ? ESCAPE '\\' OR e.title LIKE ? ESCAPE '\\' OR e.location LIKE ? ESCAPE '\\')
        ORDER BY p.pinned_at IS NULL, p.pinned_at DESC, ${SORTS[sort]} LIMIT ? OFFSET ?`,
     )
-    .all(viewer ? 1 : 0, limit + 1, offset) as unknown as PostRow[]
+    .all(viewer ? 1 : 0, pattern, pattern, pattern, pattern, limit + 1, offset) as unknown as PostRow[]
 
   const hasMore = rows.length > limit
   return { posts: await toPosts(rows.slice(0, limit), viewer), nextOffset: hasMore ? offset + limit : null }
