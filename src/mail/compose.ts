@@ -5,7 +5,7 @@ import { findByMemberId } from '../members.ts'
 import { getProfile } from '../lldap.ts'
 import { backend, type Account, type Address } from './backend.ts'
 import { isReply } from './grouping.ts'
-import { sanitizeCompose, toText } from './html.ts'
+import { inlineUploadIds, sanitizeCompose, toText } from './html.ts'
 import { ensureFolder, load, openMailbox } from './mail.ts'
 import { MAX_MAIL_BYTES, saveUpload, takeUploads, type Upload } from './uploads.ts'
 
@@ -129,8 +129,16 @@ export interface Built {
 }
 
 export async function buildMessage(account: Account, owner: string, input: ComposeInput, options: { draft: boolean; messageId?: string }): Promise<Built> {
-  const files: { filename: string; content: Buffer; contentType: string }[] = takeUploads(owner, input.uploadIds).map(
-    ({ upload, content }) => ({ filename: upload.name, content, contentType: upload.mime }),
+  // Pictures pasted into the text go along as parts of the mail that the text points to
+  const inline = new Set(inlineUploadIds(input.html))
+  const ids = [...new Set([...input.uploadIds, ...inline])]
+  const files: { filename: string; content: Buffer; contentType: string; cid?: string; contentDisposition?: 'inline' }[] = takeUploads(owner, ids).map(
+    ({ upload, content }) => ({
+      filename: upload.name,
+      content,
+      contentType: upload.mime,
+      ...(inline.has(upload.id) ? { cid: upload.id, contentDisposition: 'inline' as const } : {}),
+    }),
   )
 
   // The attachments of a mail that is forwarded go along with it
@@ -239,6 +247,9 @@ const paragraphs = (text: string) =>
     .map(part => `<p>${escape(part).replace(/\n/g, '<br>')}</p>`)
     .join('')
 
+// Pictures of a quoted mail are not sent along again
+const withoutPictures = (html: string) => html.replace(/<img\b[^>]*>/gi, '')
+
 const when = new Intl.DateTimeFormat('nb', { dateStyle: 'long', timeStyle: 'short' })
 const person = (a: Address) => (a.name ? `${a.name} &lt;${escape(a.address)}&gt;` : escape(a.address))
 
@@ -260,8 +271,17 @@ export async function composeFrom(account: Account, owner: string, id: string, m
 
   if (mode === 'draft') {
     const attachments: Upload[] = []
+    let draftHtml = originalHtml
     for (const attachment of parsed.attachments) {
-      if (isInlinePart(attachment)) continue
+      if (isInlinePart(attachment)) {
+        // A picture pasted into the draft: kept as a new upload that the text points to
+        const old = attachment.cid?.replace(/^<|>$/g, '').toLowerCase()
+        if (old && DRAFT_ID.test(old)) {
+          const upload = saveUpload(owner, { name: attachment.filename || 'bilde', type: attachment.contentType, bytes: attachment.content })
+          draftHtml = draftHtml.split(`cid:${old}`).join(`cid:${upload.id}`)
+        }
+        continue
+      }
       attachments.push(saveUpload(owner, { name: attachment.filename || 'vedlegg', type: attachment.contentType, bytes: attachment.content }))
     }
     const draftId = parsed.headers.get(DRAFT_HEADER.toLowerCase())
@@ -271,7 +291,7 @@ export async function composeFrom(account: Account, owner: string, id: string, m
       cc,
       bcc: addressesOf(parsed.bcc),
       subject,
-      html: originalHtml,
+      html: draftHtml,
       replyTo: null,
       forwardOf: null,
       draftId: typeof draftId === 'string' && DRAFT_ID.test(draftId) ? draftId : null,
@@ -289,7 +309,7 @@ export async function composeFrom(account: Account, owner: string, id: string, m
       cc: [],
       bcc: [],
       subject: /^(fwd?|vs|vl):/i.test(subject.trim()) ? subject : `Fwd: ${subject}`,
-      html: `<p></p>${header}<blockquote>${originalHtml}</blockquote>`,
+      html: `<p></p>${header}<blockquote>${withoutPictures(originalHtml)}</blockquote>`,
       replyTo: null,
       forwardOf: id,
       draftId: null,
@@ -319,7 +339,7 @@ export async function composeFrom(account: Account, owner: string, id: string, m
     cc: others,
     bcc: [],
     subject: isReply(subject) ? subject : `Re: ${subject}`,
-    html: `<p></p><p>${escape(when.format(date))} skrev ${escape(sender)}:</p><blockquote>${originalHtml}</blockquote>`,
+    html: `<p></p><p>${escape(when.format(date))} skrev ${escape(sender)}:</p><blockquote>${withoutPictures(originalHtml)}</blockquote>`,
     replyTo: id,
     forwardOf: null,
     draftId: null,

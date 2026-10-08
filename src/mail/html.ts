@@ -62,14 +62,27 @@ export function sanitizeIncoming(html: string, { inline, showImages }: IncomingO
   return { html: clean, blockedImages: blocked }
 }
 
-// What members write in the editor: paragraphs, simple formatting, lists, quotes and links
+const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+const INLINE_SRC = new RegExp(`^cid:(${UUID})$`, 'i')
+
+// The uploads a mail shows in its text: pictures pasted into the editor, written as cid:<upload id>
+export const inlineUploadIds = (html: string) =>
+  [...new Set([...html.matchAll(new RegExp(`<img[^>]*\\ssrc="cid:(${UUID})"`, 'gi'))].map(m => m[1].toLowerCase()))]
+
+// What members write in the editor: paragraphs, simple formatting, lists, quotes, links and pasted pictures
 export const sanitizeCompose = (html: string) =>
   sanitizeHtml(html, {
-    allowedTags: ['p', 'br', 'strong', 'em', 'u', 's', 'ul', 'ol', 'li', 'blockquote', 'a', 'h2', 'h3', 'hr', 'code', 'pre'],
-    allowedAttributes: { a: ['href'] },
+    allowedTags: ['p', 'br', 'strong', 'em', 'u', 's', 'ul', 'ol', 'li', 'blockquote', 'a', 'h2', 'h3', 'hr', 'code', 'pre', 'img'],
+    allowedAttributes: { a: ['href'], img: ['src', 'alt'] },
     allowedSchemes: ['http', 'https', 'mailto'],
+    allowedSchemesByTag: { img: ['cid'] },
     allowProtocolRelative: false,
-    transformTags: { a: (tagName, attribs) => ({ tagName, attribs: { ...attribs, rel: 'noopener noreferrer' } }) },
+    transformTags: {
+      a: (tagName, attribs) => ({ tagName, attribs: { ...attribs, rel: 'noopener noreferrer' } }),
+      // Only our own uploads; the pictures of a mail that is quoted in a reply are left out
+      img: (tagName, attribs) => ({ tagName, attribs: INLINE_SRC.test(attribs.src ?? '') ? { src: attribs.src.toLowerCase(), alt: attribs.alt ?? '' } : ({} as Record<string, string>) }),
+    },
+    exclusiveFilter: frame => frame.tag === 'img' && !frame.attribs.src,
   })
 
 // The plain text alternative of a mail, and what the feed gets when a mail is shared there

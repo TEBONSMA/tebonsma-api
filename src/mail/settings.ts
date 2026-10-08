@@ -42,7 +42,8 @@ export function saveSettings(owner: string, input: Record<string, unknown>): Mai
   }
   if (typeof conversations !== 'boolean') throw new HTTPException(400, { message: 'Ugyldig forespørsel' })
 
-  const clean = sanitizeCompose(signature)
+  // A signature has no uploads to point to, so pictures are left out
+  const clean = sanitizeCompose(signature).replace(/<img\b[^>]*>/gi, '')
   if (clean.length > MAX_SIGNATURE_LENGTH) throw new HTTPException(400, { message: 'Signaturen er for lang' })
   db.prepare(
     `INSERT INTO mail_settings (owner, signature, undo_seconds, conversations) VALUES (?, ?, ?, ?)
