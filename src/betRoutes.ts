@@ -326,7 +326,7 @@ function readWheelBets(raw: unknown): WheelBets {
   return bets
 }
 
-// Buran: take out by itself at this multiplier, 1,01 to the most the rocket goes, or not at all
+// Fyllekjøring: take out by itself at this multiplier, 1,01 to the furthest the car goes, or not at all
 function readTarget(raw: unknown) {
   if (raw === undefined || raw === null) return null
   if (typeof raw !== 'number' || !Number.isFinite(raw)) throw bad('Ugyldig mål')
@@ -496,8 +496,9 @@ betRoutes.post('/bet/casino/hjulet/spin', async c => {
   const spin = playWheel(viewer, readWheelBets(body.bets), body.trial === true)
   return c.json({ ...spin, account: await getAccount(viewer) })
 })
-// Buran: the rocket in the air, if any; launch { stake, target? }; take out; and wait for the
-// landing, which answers when the round is over (at the latest when the rocket blows up)
+// Fyllekjøring (buran in the paths): the own car on the road, if any; start { stake, target? };
+// take out; and wait for the landing, which answers when the round is over (at the latest when
+// the car crashes)
 betRoutes.get('/bet/casino/buran', c => c.json({ flight: currentFlight(viewerOf(c)) }))
 betRoutes.post('/bet/casino/buran/launch', async c => {
   const body = await readBody(c)

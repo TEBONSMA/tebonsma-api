@@ -69,7 +69,7 @@ before(async () => {
       SITE_URL: ORIGIN,
       BOTS: 'off',
       NEW_MARKETS_CHECK_SECONDS: '1',
-      // Buran's rocket climbs 50 times as fast: 250x in about a second
+      // Fyllekjøring's multiplier climbs 50 times as fast: 250x in about a second
       CRASH_SPEED: '50',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -613,7 +613,7 @@ describe('more casino', () => {
     assert.equal((await call('POST', '/bet/casino/hjulet/spin', 'kari', { bets: {} })).status, 400)
   })
 
-  it('flies Buran until the member takes out or it blows up', async () => {
+  it('drives Fyllekjøring until the member takes out or the car crashes', async () => {
     const before = await balance('ola')
     const launched = await call('POST', '/bet/casino/buran/launch', 'ola', { stake: 10 })
     assert.equal(launched.status, 201, JSON.stringify(launched.data))
@@ -621,7 +621,7 @@ describe('more casino', () => {
     assert.equal(flight.status, 'playing')
     assert.ok(!('crash' in flight.detail), 'the crash point is secret while it flies')
     assert.equal((await call('GET', '/bet/casino/buran', 'ola')).data.flight?.id, flight.id)
-    assert.equal((await call('POST', '/bet/casino/buran/launch', 'ola', { stake: 10 })).status, 409, 'one rocket at a time')
+    assert.equal((await call('POST', '/bet/casino/buran/launch', 'ola', { stake: 10 })).status, 409, 'one drive at a time')
 
     const taken = await call('POST', `/bet/casino/buran/${flight.id}/takeout`, 'ola')
     assert.equal(taken.status, 200)
@@ -634,7 +634,7 @@ describe('more casino', () => {
     }
     assert.equal(await balance('ola'), before - 10 + done.payout)
 
-    // With a target, it takes out by itself if the rocket gets that far
+    // With a target, it takes out by itself if the car gets that far
     const auto = await call('POST', '/bet/casino/buran/launch', 'ola', { stake: 100, target: 1.5 })
     const landed = await call('GET', `/bet/casino/buran/${auto.data.flight.id}/landing`, 'ola')
     const result = landed.data.flight

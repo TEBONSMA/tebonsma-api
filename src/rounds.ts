@@ -1,7 +1,7 @@
 import { randomInt, randomUUID } from 'node:crypto'
 import { HTTPException } from 'hono/http-exception'
 import { addCasinoRow, balanceOf } from './bets.ts'
-import { drawCrash, multiplierAt, timeAt } from './crash.ts'
+import { drawCrash, MAX_CRASH, multiplierAt, timeAt } from './crash.ts'
 import { db, transaction } from './db.ts'
 import type { Viewer } from './feed.ts'
 import { MEMBERS } from './flaksGames.ts'
@@ -10,9 +10,10 @@ import { payoutOf, playSlot, type SlotResult } from './slot.ts'
 import { spinWheel, WHEEL_NAMES, WHEEL_ODDS, wheelPayout, type WheelSymbol } from './wheel.ts'
 
 // Three more casino games, kept in one table of rounds: Pirotsma (the collector slot in
-// slot.ts), TEB-hjulet (the money wheel in wheel.ts) and Buran (the crash game in crash.ts).
+// slot.ts), TEB-hjulet (the money wheel in wheel.ts) and Fyllekjøring (the crash game in crash.ts,
+// called buran inside, where it began as a rocket).
 // Coins move through the ledger like the other games of luck. A slot spin or a wheel spin is
-// decided at once; a Buran round flies until the member takes out or the rocket blows up. Free
+// decided at once; a Fyllekjøring round drives on until the member takes out or the car crashes. Free
 // rounds (trial) play the same, but take and pay nothing and aren't kept.
 
 db.exec(`
@@ -23,9 +24,9 @@ db.exec(`
     stake      INTEGER NOT NULL,
     payout     INTEGER NOT NULL DEFAULT 0,
     status     TEXT NOT NULL DEFAULT 'done' CHECK (status IN ('playing', 'done')),
-    -- What happened, for the lists (JSON); Buran's crash point is only in it once it is done
+    -- What happened, for the lists (JSON); Fyllekjøring's crash point is only in it once it is done
     detail     TEXT NOT NULL,
-    -- Buran while it flies: the crash point (hundredths) and the member's target, if any
+    -- Fyllekjøring while it drives: the crash point (hundredths) and the member's target, if any
     crash      INTEGER,
     target     INTEGER,
     created_at TEXT NOT NULL,
@@ -35,7 +36,7 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS flaks_rounds_done ON flaks_rounds (status, done_at);
 `)
 
-export const ROUND_GAMES = { pirotsma: 'Pirotsma', hjulet: 'TEB-hjulet', buran: 'Buran' } as const
+export const ROUND_GAMES = { pirotsma: 'Pirotsma', hjulet: 'TEB-hjulet', buran: 'Fyllekjøring' } as const
 export type RoundGame = keyof typeof ROUND_GAMES
 
 const DONE_SHOWN = 100
@@ -159,7 +160,7 @@ export function playWheel(viewer: Viewer, bets: WheelBets, trial: boolean) {
 
 export const wheelOdds = () => WHEEL_ODDS
 
-// --- Buran
+// --- Fyllekjøring
 
 const findRound = (id: string) => db.prepare('SELECT * FROM flaks_rounds WHERE id = ?').get(id) as RoundRow | undefined
 const launchedAt = (row: RoundRow) => Date.parse(row.created_at)
@@ -177,7 +178,8 @@ function land(row: RoundRow, takenAt: number | null, at: number) {
   if (payout > 0) addCasinoRow(row.username, payout, ROUND_GAMES.buran, `Tok ut ved ${(takenAt! / 100).toFixed(2).replace('.', ',')}x`)
 }
 
-// A round whose rocket has blown up by now ends there, paid at the target if it got that far
+// A round whose car has crashed by now ends there, paid at the target if it got that far. One
+// that got all the way to Palanga lands there and pays the most there is.
 function settleIfLanded(row: RoundRow, time = Date.now()) {
   if (row.status !== 'playing') return
   const blownAt = launchedAt(row) + timeAt(row.crash!)
@@ -186,16 +188,16 @@ function settleIfLanded(row: RoundRow, time = Date.now()) {
     if (reached <= time) land(row, row.target, reached)
     return
   }
-  if (blownAt <= time) land(row, null, blownAt)
+  if (blownAt <= time) land(row, row.crash === MAX_CRASH * 100 ? row.crash : null, blownAt)
 }
 
-// Every round that has blown up or reached its target by now, also of members who left the page
+// Every round that has crashed or reached its target by now, also of members who left the page
 export function settleLandedRounds() {
   const rows = db.prepare("SELECT * FROM flaks_rounds WHERE game = 'buran' AND status = 'playing'").all() as unknown as RoundRow[]
   transaction(() => rows.forEach(row => settleIfLanded(row)))
 }
 
-// What the site may know of a round in the air: never the crash point until it is over. elapsed:
+// What the site may know of a round on the road: never the crash point until it is over. elapsed:
 // ms since launch by the server's clock, so the site can fly it on from where it is.
 const toFlight = (row: RoundRow) => ({
   ...toRound(row),
@@ -221,10 +223,10 @@ export function launch(viewer: Viewer, stake: number, target: number | null) {
     const flying = db.prepare("SELECT * FROM flaks_rounds WHERE username = ? AND game = 'buran' AND status = 'playing'").all(viewer.username) as unknown as RoundRow[]
     flying.forEach(row => settleIfLanded(row))
     if (db.prepare("SELECT 1 FROM flaks_rounds WHERE username = ? AND game = 'buran' AND status = 'playing'").get(viewer.username)) {
-      throw new HTTPException(409, { message: 'Raketten din er allerede i lufta' })
+      throw new HTTPException(409, { message: 'Du er allerede ute og kjører' })
     }
     ensureCoins(viewer, stake)
-    addCasinoRow(viewer.username, -stake, ROUND_GAMES.buran, 'Oppskyting')
+    addCasinoRow(viewer.username, -stake, ROUND_GAMES.buran, 'Kjøretur')
     const row: RoundRow = {
       id: randomUUID(),
       username: viewer.username,
@@ -249,7 +251,7 @@ function ownRound(viewer: Viewer, id: string) {
   return row
 }
 
-// Taking out: at the multiplier the rocket has reached by the server's clock, if it is still up
+// Taking out: at the multiplier the car has reached by the server's clock, if it is still going
 export function takeOut(viewer: Viewer, id: string) {
   return transaction(() => {
     const row = ownRound(viewer, id)
@@ -265,7 +267,7 @@ export function takeOut(viewer: Viewer, id: string) {
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
-// Waits until the round is over, at the latest when the rocket blows up, and tells how it went
+// Waits until the round is over, at the latest when the car crashes, and tells how it went
 export async function waitForLanding(viewer: Viewer, id: string) {
   const row = ownRound(viewer, id)
   if (row.status === 'playing') {
@@ -276,7 +278,7 @@ export async function waitForLanding(viewer: Viewer, id: string) {
   return toFlight(findRound(id)!)
 }
 
-// A free round: the crash point comes along, since nothing is at stake, and the site flies it
+// A free round: the crash point comes along, since nothing is at stake, and the site drives it
 export const tryFlight = () => ({ crash: drawCrash(randomInt) })
 
 // --- Lists

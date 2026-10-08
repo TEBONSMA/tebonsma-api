@@ -185,13 +185,13 @@ if (!trial) {
 // Every hour, a push to TebBet's members about markets that have opened since
 if (!trial) startNewMarketsCheck()
 
-// Buran rockets of members who left the page still blow up, or reach their target
+// Fyllekjøring cars of members who left the page still crash, or reach their target
 if (!trial) {
   setInterval(() => {
     try {
       settleLandedRounds()
     } catch (err) {
-      console.error('could not settle Buran rounds:', err)
+      console.error('could not settle Fyllekjøring rounds:', err)
     }
   }, 30 * 1000)
 }
