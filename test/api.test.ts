@@ -518,6 +518,33 @@ describe('TebBet', () => {
     assert.equal((await call('GET', '/bet/me', 'ola')).data.balance, before, 'no coins move')
     assert.equal((await call('GET', '/bet/flaks/spins', 'ola')).data.length, 0, 'nothing is kept')
   })
+
+  it('takes roulette bets on the lines between the numbers', async () => {
+    const odds: Record<string, number> = { split: 18, street: 12, corner: 9, line: 6 }
+    const bets = [
+      { type: 'split', numbers: [20, 17], stake: 10 },
+      { type: 'street', numbers: [13, 14, 15], stake: 10 },
+      { type: 'corner', numbers: [0, 1, 2, 3], stake: 10 },
+      { type: 'line', numbers: [31, 32, 33, 34, 35, 36], stake: 10 },
+    ]
+    for (let i = 0; i < 15; i++) {
+      const spin = await call('POST', '/bet/casino/roulette/try', 'ola', { bets })
+      assert.equal(spin.status, 200, JSON.stringify(spin.data))
+      assert.deepEqual(spin.data.bets[0].numbers, [17, 20], 'the numbers lowest first')
+      for (const bet of spin.data.bets) {
+        const won = bet.numbers.includes(spin.data.number)
+        assert.equal(bet.won, won)
+        assert.equal(bet.payout, won ? bet.stake * odds[bet.type] : 0)
+      }
+    }
+    const refused = async (bet: object) => (await call('POST', '/bet/casino/roulette/try', 'ola', { bets: [{ ...bet, stake: 10 }] })).status
+    assert.equal(await refused({ type: 'split', numbers: [17, 19] }), 400, 'not side by side')
+    assert.equal(await refused({ type: 'split', numbers: [3, 4] }), 400, 'not across the end of a row')
+    assert.equal(await refused({ type: 'corner', numbers: [1, 2, 3, 4] }), 400)
+    assert.equal(await refused({ type: 'street', numbers: [2, 3, 4] }), 400)
+    assert.equal(await refused({ type: 'line', numbers: [34, 35, 36] }), 400)
+    assert.equal(await refused({ type: 'split' }), 400)
+  })
 })
 
 describe('push notifications', () => {
