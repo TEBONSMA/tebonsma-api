@@ -599,8 +599,9 @@ describe('more casino', () => {
   })
 
   it('drives Fyllekjøring until the member takes out or the car crashes', async () => {
-    // A car can crash near the start, before it can be looked at (it climbs 50 times as fast here):
-    // then it drives again, once that one, and any second drive that got going, is over
+    // A car can crash near the start, before it can be looked at (it climbs 50 times as fast here,
+    // and how far it gets before the next call depends on the machine): then it drives again, once
+    // that one, and any second drive that got going, is over
     let before = 0
     let flight
     for (let tries = 0; ; tries++) {
@@ -615,8 +616,11 @@ describe('more casino', () => {
       const again = await call('POST', '/bet/casino/fyllekjoring/launch', 'ola', { stake: 10 })
       // One drive at a time
       if (current?.id === flight.id && again.status === 409) break
+      // Over before anyone took out: it crashed, and paid nothing
       const over = (await call('GET', `/bet/casino/fyllekjoring/${flight.id}/landing`, 'ola')).data.flight
-      assert.ok(over.detail.crash < 150, 'only a car that crashed near the start is over this soon')
+      assert.equal(over.status, 'done')
+      assert.equal(over.detail.takenAt, null)
+      assert.equal(over.payout, 0)
       if (again.status === 201) await call('GET', `/bet/casino/fyllekjoring/${again.data.flight.id}/landing`, 'ola')
     }
 
