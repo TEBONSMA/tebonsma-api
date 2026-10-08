@@ -20,7 +20,7 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS flaks_rounds (
     id         TEXT PRIMARY KEY,
     username   TEXT NOT NULL,
-    game       TEXT NOT NULL CHECK (game IN ('pirotsma', 'hjulet', 'buran')),
+    game       TEXT NOT NULL CHECK (game IN ('sponsorjakten', 'hjulet', 'buran')),
     stake      INTEGER NOT NULL,
     payout     INTEGER NOT NULL DEFAULT 0,
     status     TEXT NOT NULL DEFAULT 'done' CHECK (status IN ('playing', 'done')),
@@ -36,7 +36,7 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS flaks_rounds_done ON flaks_rounds (status, done_at);
 `)
 
-export const ROUND_GAMES = { pirotsma: 'Sponsorjakten', hjulet: 'TEB-hjulet', buran: 'Fyllekjøring' } as const
+export const ROUND_GAMES = { sponsorjakten: 'Sponsorjakten', hjulet: 'TEB-hjulet', buran: 'Fyllekjøring' } as const
 export type RoundGame = keyof typeof ROUND_GAMES
 
 const DONE_SHOWN = 100
@@ -104,12 +104,12 @@ export function spinSlot(viewer: Viewer, stake: number, trial: boolean) {
   if (trial) return { frames: result.frames, members, payout, round: null }
   return transaction(() => {
     ensureCoins(viewer, stake)
-    addCasinoRow(viewer.username, -stake, ROUND_GAMES.pirotsma, 'Spinn')
-    if (payout > 0) addCasinoRow(viewer.username, payout, ROUND_GAMES.pirotsma, result.freeSpins > 0 ? `Vant ${payout}, med gratisspinn` : `Vant ${payout}`)
+    addCasinoRow(viewer.username, -stake, ROUND_GAMES.sponsorjakten, 'Spinn')
+    if (payout > 0) addCasinoRow(viewer.username, payout, ROUND_GAMES.sponsorjakten, result.freeSpins > 0 ? `Vant ${payout}, med gratisspinn` : `Vant ${payout}`)
     const row: RoundRow = {
       id: randomUUID(),
       username: viewer.username,
-      game: 'pirotsma',
+      game: 'sponsorjakten',
       stake,
       payout,
       status: 'done',

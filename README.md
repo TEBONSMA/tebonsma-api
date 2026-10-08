@@ -156,7 +156,7 @@ can get a new closing time.
 | POST | `/bet/casino/blackjack/deal` | Deal a hand: `{ bet, trial? }`. A free one (`trial: true`) takes and pays nothing |
 | POST | `/bet/casino/blackjack/:id/:action` | `hit`, `stand`, `double` or `split` the hand being played |
 | GET | `/bet/flaks/hands` | Own blackjack hands played to the end |
-| POST | `/bet/casino/pirotsma/spin` | Sponsorjakten, the collector slot (`src/slot.ts`): `{ stake, trial? }`. The whole spin comes back as `frames` to show, free spins included, with the four members who hunt the sponsors' goods |
+| POST | `/bet/casino/sponsorjakten/spin` | Sponsorjakten, the collector slot (`src/slot.ts`): `{ stake, trial? }`. The whole spin comes back as `frames` to show, free spins included, with the four members who hunt the sponsors' goods |
 | POST | `/bet/casino/hjulet/spin` | TEB-hjulet, the money wheel (`src/wheel.ts`): `{ bets: { jarritos?, underberg?, nachspiel?, pulebord?, nyttar?, sommerfest? }, trial? }`, coins on each |
 | GET | `/bet/casino/buran` | Fyllekjøring, the crash game (`src/crash.ts`; `buran` in the paths): the own car on the road, if any (`{ flight }`) |
 | POST | `/bet/casino/buran/launch` | Start: `{ stake, target? }`, where `target` takes out by itself at that multiplier (1.01 to 250). One drive at a time; the crash point stays secret until the round is over. A car that gets all the way (250x) pays that to everyone still in it |

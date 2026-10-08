@@ -554,7 +554,7 @@ describe('more casino', () => {
 
   it('spins Sponsorjakten, with frames that add up to the win', async () => {
     const before = await balance('kari')
-    const spin = await call('POST', '/bet/casino/pirotsma/spin', 'kari', { stake: 20 })
+    const spin = await call('POST', '/bet/casino/sponsorjakten/spin', 'kari', { stake: 20 })
     assert.equal(spin.status, 200, JSON.stringify(spin.data))
     assert.equal(spin.data.members.length, 4)
     assert.equal(await balance('kari'), before - 20 + spin.data.payout)
@@ -589,13 +589,13 @@ describe('more casino', () => {
     }
     assert.equal(spin.data.payout, Math.floor((20 * Math.min(won, 500_000)) / 100))
 
-    const free = await call('POST', '/bet/casino/pirotsma/spin', 'kari', { stake: 20, trial: true })
+    const free = await call('POST', '/bet/casino/sponsorjakten/spin', 'kari', { stake: 20, trial: true })
     assert.equal(free.status, 200)
     assert.equal(free.data.round, null)
     assert.equal(await balance('kari'), before - 20 + spin.data.payout, 'a free spin moves nothing')
     const mine = await call('GET', '/bet/flaks/rounds', 'kari')
     assert.equal(mine.data.length, 1, 'only the real spin is kept')
-    assert.equal((await call('POST', '/bet/casino/pirotsma/spin', 'kari', { stake: 0 })).status, 400)
+    assert.equal((await call('POST', '/bet/casino/sponsorjakten/spin', 'kari', { stake: 0 })).status, 400)
   })
 
   it('spins TEB-hjulet and pays the symbol it stops on', async () => {
