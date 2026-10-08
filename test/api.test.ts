@@ -552,7 +552,7 @@ describe('TebBet', () => {
 describe('more casino', () => {
   const balance = async (user: string) => (await call('GET', '/bet/me', user)).data.balance as number
 
-  it('spins Pirotsma, with frames that add up to the win', async () => {
+  it('spins Sponsorjakten, with frames that add up to the win', async () => {
     const before = await balance('kari')
     const spin = await call('POST', '/bet/casino/pirotsma/spin', 'kari', { stake: 20 })
     assert.equal(spin.status, 200, JSON.stringify(spin.data))

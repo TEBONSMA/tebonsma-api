@@ -482,7 +482,8 @@ betRoutes.post('/bet/casino/roulette/spin', async c => {
   const spin = spinRoulette(viewer, readRouletteBets(await readBody(c)))
   return c.json({ ...spin, account: await getAccount(viewer) })
 })
-// Pirotsma: { stake, trial? }. The whole spin comes back as frames to show, free spins included.
+// Sponsorjakten (pirotsma in the paths): { stake, trial? }. The whole spin comes back as frames to
+// show, free spins included.
 betRoutes.post('/bet/casino/pirotsma/spin', async c => {
   const body = await readBody(c)
   const viewer = viewerOf(c)

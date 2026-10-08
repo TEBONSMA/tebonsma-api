@@ -10,7 +10,7 @@ import { roundsBefore } from './rounds.ts'
 
 // Activity: everything that happens on TebBet in one log, the newest first. Every slip played,
 // every market decided or called off, every scratch card scratched to the end, every roulette spin,
-// every blackjack hand played out and every round of Pirotsma, TEB-hjulet and Fyllekjøring that is over
+// every blackjack hand played out and every round of Sponsorjakten, TEB-hjulet and Fyllekjøring that is over
 // (free ones left out), a page at a time. Everyone sees the same log; who played what is already shown on each event and group,
 // but not the odds on markets the viewer is kept out of.
 

@@ -9,7 +9,7 @@ import { usernameOf } from './members.ts'
 import { payoutOf, playSlot, type SlotResult } from './slot.ts'
 import { spinWheel, WHEEL_NAMES, WHEEL_ODDS, wheelPayout, type WheelSymbol } from './wheel.ts'
 
-// Three more casino games, kept in one table of rounds: Pirotsma (the collector slot in
+// Three more casino games, kept in one table of rounds: Sponsorjakten (the collector slot in
 // slot.ts), TEB-hjulet (the money wheel in wheel.ts) and Fyllekjøring (the crash game in crash.ts,
 // called buran inside, where it began as a rocket).
 // Coins move through the ledger like the other games of luck. A slot spin or a wheel spin is
@@ -36,7 +36,7 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS flaks_rounds_done ON flaks_rounds (status, done_at);
 `)
 
-export const ROUND_GAMES = { pirotsma: 'Pirotsma', hjulet: 'TEB-hjulet', buran: 'Fyllekjøring' } as const
+export const ROUND_GAMES = { pirotsma: 'Sponsorjakten', hjulet: 'TEB-hjulet', buran: 'Fyllekjøring' } as const
 export type RoundGame = keyof typeof ROUND_GAMES
 
 const DONE_SHOWN = 100
@@ -80,7 +80,7 @@ const ensureCoins = (viewer: Viewer, stake: number) => {
   if (stake > balanceOf(viewer.username)) throw bad('Du har ikke nok TEB-mynter')
 }
 
-// --- Pirotsma
+// --- Sponsorjakten
 
 // Four of the members are the collectors, one for each colour, new ones every spin
 const collectorsFor = () => {

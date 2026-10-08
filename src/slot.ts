@@ -5,7 +5,7 @@
 // grid falls down, collectors included, new pieces drop in from the top, and they go again.
 // Three bonus pieces in one spin give free spins, where the upgrades are kept from spin to spin.
 //
-// The engine only knows colours 0-3 and kinds of pieces; the theme (flavours, members) is the
+// The engine only knows colours 0-3 and kinds of pieces; the theme (sponsors, members) is the
 // site's. Everything the site needs to show a spin is in the frames, in order.
 
 export const ROWS = 6
