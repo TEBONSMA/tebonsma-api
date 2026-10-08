@@ -10,8 +10,7 @@ import { payoutOf, playSlot, type SlotResult } from './slot.ts'
 import { spinWheel, WHEEL_NAMES, WHEEL_ODDS, wheelPayout, type WheelSymbol } from './wheel.ts'
 
 // Three more casino games, kept in one table of rounds: Sponsorjakten (the collector slot in
-// slot.ts), TEB-hjulet (the money wheel in wheel.ts) and Fyllekjøring (the crash game in crash.ts,
-// called buran inside, where it began as a rocket).
+// slot.ts), TEB-hjulet (the money wheel in wheel.ts) and Fyllekjøring (the crash game in crash.ts).
 // Coins move through the ledger like the other games of luck. A slot spin or a wheel spin is
 // decided at once; a Fyllekjøring round drives on until the member takes out or the car crashes. Free
 // rounds (trial) play the same, but take and pay nothing and aren't kept.
@@ -20,7 +19,7 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS flaks_rounds (
     id         TEXT PRIMARY KEY,
     username   TEXT NOT NULL,
-    game       TEXT NOT NULL CHECK (game IN ('sponsorjakten', 'hjulet', 'buran')),
+    game       TEXT NOT NULL CHECK (game IN ('sponsorjakten', 'hjulet', 'fyllekjoring')),
     stake      INTEGER NOT NULL,
     payout     INTEGER NOT NULL DEFAULT 0,
     status     TEXT NOT NULL DEFAULT 'done' CHECK (status IN ('playing', 'done')),
@@ -36,7 +35,7 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS flaks_rounds_done ON flaks_rounds (status, done_at);
 `)
 
-export const ROUND_GAMES = { sponsorjakten: 'Sponsorjakten', hjulet: 'TEB-hjulet', buran: 'Fyllekjøring' } as const
+export const ROUND_GAMES = { sponsorjakten: 'Sponsorjakten', hjulet: 'TEB-hjulet', fyllekjoring: 'Fyllekjøring' } as const
 export type RoundGame = keyof typeof ROUND_GAMES
 
 const DONE_SHOWN = 100
@@ -175,7 +174,7 @@ function land(row: RoundRow, takenAt: number | null, at: number) {
     new Date(at).toISOString(),
     row.id,
   )
-  if (payout > 0) addCasinoRow(row.username, payout, ROUND_GAMES.buran, `Hoppet av ved ${(takenAt! / 100).toFixed(2).replace('.', ',')}x`)
+  if (payout > 0) addCasinoRow(row.username, payout, ROUND_GAMES.fyllekjoring, `Hoppet av ved ${(takenAt! / 100).toFixed(2).replace('.', ',')}x`)
 }
 
 // A round whose car has crashed by now ends there, paid at the target if it got that far. One
@@ -193,7 +192,7 @@ function settleIfLanded(row: RoundRow, time = Date.now()) {
 
 // Every round that has crashed or reached its target by now, also of members who left the page
 export function settleLandedRounds() {
-  const rows = db.prepare("SELECT * FROM flaks_rounds WHERE game = 'buran' AND status = 'playing'").all() as unknown as RoundRow[]
+  const rows = db.prepare("SELECT * FROM flaks_rounds WHERE game = 'fyllekjoring' AND status = 'playing'").all() as unknown as RoundRow[]
   transaction(() => rows.forEach(row => settleIfLanded(row)))
 }
 
@@ -208,7 +207,7 @@ const toFlight = (row: RoundRow) => ({
 })
 
 export function currentFlight(viewer: Viewer) {
-  const row = db.prepare("SELECT * FROM flaks_rounds WHERE username = ? AND game = 'buran' AND status = 'playing'").get(viewer.username) as
+  const row = db.prepare("SELECT * FROM flaks_rounds WHERE username = ? AND game = 'fyllekjoring' AND status = 'playing'").get(viewer.username) as
     | RoundRow
     | undefined
   if (!row) return null
@@ -220,17 +219,17 @@ export function currentFlight(viewer: Viewer) {
 // target: take out by itself at this multiplier (hundredths), or null
 export function launch(viewer: Viewer, stake: number, target: number | null) {
   return transaction(() => {
-    const flying = db.prepare("SELECT * FROM flaks_rounds WHERE username = ? AND game = 'buran' AND status = 'playing'").all(viewer.username) as unknown as RoundRow[]
+    const flying = db.prepare("SELECT * FROM flaks_rounds WHERE username = ? AND game = 'fyllekjoring' AND status = 'playing'").all(viewer.username) as unknown as RoundRow[]
     flying.forEach(row => settleIfLanded(row))
-    if (db.prepare("SELECT 1 FROM flaks_rounds WHERE username = ? AND game = 'buran' AND status = 'playing'").get(viewer.username)) {
+    if (db.prepare("SELECT 1 FROM flaks_rounds WHERE username = ? AND game = 'fyllekjoring' AND status = 'playing'").get(viewer.username)) {
       throw new HTTPException(409, { message: 'Du er allerede ute og kjører' })
     }
     ensureCoins(viewer, stake)
-    addCasinoRow(viewer.username, -stake, ROUND_GAMES.buran, 'Kjøretur')
+    addCasinoRow(viewer.username, -stake, ROUND_GAMES.fyllekjoring, 'Kjøretur')
     const row: RoundRow = {
       id: randomUUID(),
       username: viewer.username,
-      game: 'buran',
+      game: 'fyllekjoring',
       stake,
       payout: 0,
       status: 'playing',
@@ -247,7 +246,7 @@ export function launch(viewer: Viewer, stake: number, target: number | null) {
 
 function ownRound(viewer: Viewer, id: string) {
   const row = findRound(id)
-  if (!row || row.username !== viewer.username || row.game !== 'buran') throw new HTTPException(404, { message: 'Runden finnes ikke' })
+  if (!row || row.username !== viewer.username || row.game !== 'fyllekjoring') throw new HTTPException(404, { message: 'Runden finnes ikke' })
   return row
 }
 

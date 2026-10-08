@@ -497,23 +497,23 @@ betRoutes.post('/bet/casino/hjulet/spin', async c => {
   const spin = playWheel(viewer, readWheelBets(body.bets), body.trial === true)
   return c.json({ ...spin, account: await getAccount(viewer) })
 })
-// Fyllekjøring (buran in the paths): the own car on the road, if any; start { stake, target? };
+// Fyllekjøring: the own car on the road, if any; start { stake, target? };
 // take out; and wait for the landing, which answers when the round is over (at the latest when
 // the car crashes)
-betRoutes.get('/bet/casino/buran', c => c.json({ flight: currentFlight(viewerOf(c)) }))
-betRoutes.post('/bet/casino/buran/launch', async c => {
+betRoutes.get('/bet/casino/fyllekjoring', c => c.json({ flight: currentFlight(viewerOf(c)) }))
+betRoutes.post('/bet/casino/fyllekjoring/launch', async c => {
   const body = await readBody(c)
   const viewer = viewerOf(c)
   const flight = launch(viewer, readStake(body.stake), readTarget(body.target))
   return c.json({ flight, account: await getAccount(viewer) }, 201)
 })
 // A free round: the crash point comes along and the site flies it alone
-betRoutes.post('/bet/casino/buran/try', c => c.json(tryFlight()))
-betRoutes.post('/bet/casino/buran/:id/takeout', async c => {
+betRoutes.post('/bet/casino/fyllekjoring/try', c => c.json(tryFlight()))
+betRoutes.post('/bet/casino/fyllekjoring/:id/takeout', async c => {
   const viewer = viewerOf(c)
   return c.json({ flight: takeOut(viewer, id(c)), account: await getAccount(viewer) })
 })
-betRoutes.get('/bet/casino/buran/:id/landing', async c => {
+betRoutes.get('/bet/casino/fyllekjoring/:id/landing', async c => {
   const viewer = viewerOf(c)
   const flight = await waitForLanding(viewer, id(c))
   return c.json({ flight, account: await getAccount(viewer) })

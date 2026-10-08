@@ -158,11 +158,11 @@ can get a new closing time.
 | GET | `/bet/flaks/hands` | Own blackjack hands played to the end |
 | POST | `/bet/casino/sponsorjakten/spin` | Sponsorjakten, the collector slot (`src/slot.ts`): `{ stake, trial? }`. The whole spin comes back as `frames` to show, free spins included, with the four members who hunt the sponsors' goods |
 | POST | `/bet/casino/hjulet/spin` | TEB-hjulet, the money wheel (`src/wheel.ts`): `{ bets: { jarritos?, underberg?, nachspiel?, pulebord?, nyttar?, sommerfest? }, trial? }`, coins on each |
-| GET | `/bet/casino/buran` | Fyllekjøring, the crash game (`src/crash.ts`; `buran` in the paths): the own car on the road, if any (`{ flight }`) |
-| POST | `/bet/casino/buran/launch` | Start: `{ stake, target? }`, where `target` takes out by itself at that multiplier (1.01 to 250). One drive at a time; the crash point stays secret until the round is over. A car that gets all the way (250x) pays that to everyone still in it |
-| POST | `/bet/casino/buran/:id/takeout` | Take out at the multiplier the car has reached by the server's clock, if it hasn't crashed |
-| GET | `/bet/casino/buran/:id/landing` | Answers when the round is over, at the latest when the car crashes |
-| POST | `/bet/casino/buran/try` | A free round: the crash point, for the site to fly alone |
+| GET | `/bet/casino/fyllekjoring` | Fyllekjøring, the crash game (`src/crash.ts`): the own car on the road, if any (`{ flight }`) |
+| POST | `/bet/casino/fyllekjoring/launch` | Start: `{ stake, target? }`, where `target` takes out by itself at that multiplier (1.01 to 250). One drive at a time; the crash point stays secret until the round is over. A car that gets all the way (250x) pays that to everyone still in it |
+| POST | `/bet/casino/fyllekjoring/:id/takeout` | Take out at the multiplier the car has reached by the server's clock, if it hasn't crashed |
+| GET | `/bet/casino/fyllekjoring/:id/landing` | Answers when the round is over, at the latest when the car crashes |
+| POST | `/bet/casino/fyllekjoring/try` | A free round: the crash point, for the site to fly alone |
 | GET | `/bet/flaks/rounds` | Own rounds of Sponsorjakten, TEB-hjulet and Fyllekjøring that are over |
 
 `kind` is `yesno`, `choice`, `multi` or `overunder`. A multi market also takes `winners`,
