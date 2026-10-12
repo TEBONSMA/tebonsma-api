@@ -59,7 +59,7 @@ import {
 import { idByName, usernameOf } from './members.ts'
 import { MAX_ODDS, MIN_ODDS, SPREADS, type Spread } from './odds.ts'
 import { INSIDE_TYPES, isInsideBet, ROULETTE_TYPES, type RouletteBet, type RouletteSpot } from './roulette.ts'
-import { currentFlight, launch, rounds, roundsOfMember, spinSlot, takeOut, tryFlight, waitForLanding } from './rounds.ts'
+import { currentFlight, dropPlinko, launch, rounds, roundsOfMember, spinSlot, takeOut, tryFlight, waitForLanding } from './rounds.ts'
 import { MAX_CRASH } from './crash.ts'
 import { bad, readBody, readText, viewerOf } from './feedRoutes.ts'
 
@@ -467,6 +467,20 @@ betRoutes.post('/bet/casino/roulette/spin', async c => {
   const viewer = viewerOf(c)
   const spin = spinRoulette(viewer, readRouletteBets(await readBody(c)))
   return c.json({ ...spin, account: await getAccount(viewer) })
+})
+// Plinko: { stake, count?, turn?, trial? }: count balls (1 by default) at stake each, or
+// { gift: true, count? } for balls on the house, at their own stake. The paths and
+// buckets of all of them come back at once, for the site to show. turn: the id of the turn the
+// balls are part of, if some of its balls are still falling; the answer has the turn's id.
+betRoutes.post('/bet/casino/plinko/drop', async c => {
+  const body = await readBody(c)
+  const viewer = viewerOf(c)
+  const count = body.count === undefined ? 1 : body.count
+  if (typeof count !== 'number') throw bad('Ugyldig antall kuler')
+  const turn = typeof body.turn === 'string' ? body.turn : null
+  const gift = body.gift === true && body.trial !== true
+  const drop = dropPlinko(viewer, gift ? 0 : readStake(body.stake), count, turn, body.trial === true, gift)
+  return c.json({ ...drop, account: await getAccount(viewer) })
 })
 // Sponsorjakten: { stake, trial? } or { gift: true } for a spin on the house. The whole spin comes
 // back as frames to show, free spins included.

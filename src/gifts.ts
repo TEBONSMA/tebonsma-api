@@ -4,9 +4,10 @@ import { pushToAll } from './push.ts'
 
 // Rounds on the house ("på huset"): plays of a casino game a member gets for nothing, at a set
 // stake, with what they win theirs to keep. Given for a reason, once per member and game: so far
-// the launch of Sponsorjakten and Fyllekjøring, ten of each at 25 coins.
+// the launch of Sponsorjakten and Fyllekjøring, ten of each at 25 coins, and of Plinko, 250 balls
+// at 1 coin.
 
-export type GiftGame = 'sponsorjakten' | 'fyllekjoring'
+export type GiftGame = 'sponsorjakten' | 'fyllekjoring' | 'plinko' | 'plinko'
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS casino_gifts (
@@ -25,13 +26,20 @@ db.exec(`
   );
 `)
 
-const LAUNCH = { reason: 'lansering', stake: 25, plays: 10, games: ['sponsorjakten', 'fyllekjoring'] as GiftGame[] }
+const LAUNCH = {
+  reason: 'lansering',
+  games: [
+    { game: 'sponsorjakten', stake: 25, plays: 10 },
+    { game: 'fyllekjoring', stake: 25, plays: 10 },
+    { game: 'plinko', stake: 1, plays: 250 },
+  ] as { game: GiftGame; stake: number; plays: number }[],
+}
 
 // Gives the member the rounds they have coming and don't have yet: everyone gets the launch's,
 // also members who first open TebBet later. Safe to call any number of times.
 export function giveGifts(username: string) {
   const add = db.prepare('INSERT OR IGNORE INTO casino_gifts (username, game, reason, stake, plays, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-  for (const game of LAUNCH.games) add.run(username, game, LAUNCH.reason, LAUNCH.stake, LAUNCH.plays, new Date().toISOString())
+  for (const { game, stake, plays } of LAUNCH.games) add.run(username, game, LAUNCH.reason, stake, plays, new Date().toISOString())
 }
 
 // What the member has left on the house in each game: how many plays, and at what stake
@@ -77,7 +85,7 @@ export function announceLaunch() {
   if (first.changes === 0) return
   pushToAll('tebbet', '', {
     title: 'To nye spill på TebBet',
-    body: `Sponsorjakten og Fyllekjøring er ute, og du har ${LAUNCH.plays} runder på huset i hvert av dem.`,
+    body: 'Sponsorjakten og Fyllekjøring er ute, og du har 10 runder på huset i hvert av dem.',
     url: '/',
     tag: 'casino-launch',
   })

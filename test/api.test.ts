@@ -431,6 +431,51 @@ describe('TebBet', () => {
     assert.equal((await call('GET', '/bet/activity?kind=spin,nope', 'ola')).status, 400)
   })
 
+  it('drops Plinko balls: the stake of every ball taken, the payout by the buckets, one round per turn', async () => {
+    const balance = async () => (await call('GET', '/bet/me', 'ola')).data.balance
+    const roundsOf = async () => (await call('GET', '/bet/flaks/rounds', 'ola')).data.filter((r: any) => r.game === 'plinko')
+    const before = await balance()
+    const free = await call('POST', '/bet/casino/plinko/drop', 'ola', { stake: 10, count: 5, trial: true })
+    assert.equal(free.status, 200, JSON.stringify(free.data))
+    assert.equal(free.data.balls.length, 5)
+    assert.equal(free.data.turn, null)
+    assert.equal(await balance(), before, 'a free drop moves nothing')
+    assert.equal((await roundsOf()).length, 0, 'and is not kept')
+
+    const first = await call('POST', '/bet/casino/plinko/drop', 'ola', { stake: 10, count: 5 })
+    assert.equal(first.status, 200, JSON.stringify(first.data))
+    for (const ball of first.data.balls) {
+      assert.equal(ball.path.length, 16)
+      assert.equal(ball.path.reduce((sum: number, step: number) => sum + step, 0), ball.bucket)
+      assert.equal(ball.payout, Math.floor((10 * ball.multiplier) / 100))
+    }
+    assert.equal(first.data.stake, 50)
+    assert.equal(first.data.account.balance, before - 50 + first.data.payout)
+
+    // Another drop in the same turn is part of the same round
+    const second = await call('POST', '/bet/casino/plinko/drop', 'ola', { stake: 10, count: 2, turn: first.data.turn })
+    assert.equal(second.data.turn, first.data.turn)
+    const [round, ...rest] = await roundsOf()
+    assert.equal(rest.length, 0, 'one round for the turn')
+    assert.equal(round.stake, 70)
+    assert.equal(round.payout, first.data.payout + second.data.payout)
+    assert.equal(round.detail.balls.length, 7)
+    assert.equal(await balance(), before - 70 + round.payout)
+
+    // Without the turn, it is a new one
+    const third = await call('POST', '/bet/casino/plinko/drop', 'ola', { stake: 10 })
+    assert.notEqual(third.data.turn, first.data.turn)
+    assert.equal((await roundsOf()).length, 2)
+    // Someone else's turn is not joined
+    const other = await call('POST', '/bet/casino/plinko/drop', 'admin', { stake: 10, turn: first.data.turn })
+    assert.notEqual(other.data.turn, first.data.turn)
+
+    assert.equal((await call('POST', '/bet/casino/plinko/drop', 'ola', { stake: 1.5 })).status, 400)
+    assert.equal((await call('POST', '/bet/casino/plinko/drop', 'ola', { stake: 10, count: 0 })).status, 400)
+    assert.equal((await call('POST', '/bet/casino/plinko/drop', 'ola', { stake: 10, count: 51 })).status, 400)
+    assert.equal((await call('POST', '/bet/casino/plinko/drop', 'ola', { stake: 999_999 })).status, 400, 'more than there is')
+  })
+
   it('logs scratch cards with every field', async () => {
     const bought = await call('POST', '/bet/flaks/underbergen/buy', 'kari')
     assert.equal(bought.status, 201, JSON.stringify(bought.data))
@@ -658,7 +703,7 @@ describe('more casino', () => {
 
   it('gives every member ten rounds on the house in each game, played without coins', async () => {
     const me = (await call('GET', '/bet/me', 'admin')).data
-    assert.deepEqual(me.gifts, { sponsorjakten: { left: 10, stake: 25 }, fyllekjoring: { left: 10, stake: 25 } })
+    assert.deepEqual(me.gifts, { sponsorjakten: { left: 10, stake: 25 }, fyllekjoring: { left: 10, stake: 25 }, plinko: { left: 250, stake: 1 } })
 
     const spin = await call('POST', '/bet/casino/sponsorjakten/spin', 'admin', { gift: true })
     assert.equal(spin.status, 200, JSON.stringify(spin.data))
@@ -681,11 +726,31 @@ describe('more casino', () => {
     assert.equal((await call('POST', '/bet/casino/sponsorjakten/spin', 'admin', { gift: true })).status, 400)
     assert.equal((await call('GET', '/bet/me', 'admin')).data.gifts.sponsorjakten, undefined)
 
+    // Plinko: a ball on the house is one of the ten, a turn on the house is its own round
+    const before = await balance('admin')
+    const balls = await call('POST', '/bet/casino/plinko/drop', 'admin', { gift: true, count: 4 })
+    assert.equal(balls.status, 200, JSON.stringify(balls.data))
+    assert.equal(balls.data.stake, 4)
+    assert.equal(balls.data.account.balance, before + balls.data.payout, 'nothing taken, the win paid')
+    assert.equal(balls.data.account.gifts.plinko.left, 246)
+    const more = await call('POST', '/bet/casino/plinko/drop', 'admin', { gift: true, count: 1, turn: balls.data.turn })
+    assert.equal(more.data.turn, balls.data.turn, 'joins the turn')
+    const own = await call('POST', '/bet/casino/plinko/drop', 'admin', { stake: 10, turn: balls.data.turn })
+    assert.notEqual(own.data.turn, balls.data.turn, 'but a turn is not both on the house and not')
+    const kept = (await call('GET', '/bet/flaks/rounds', 'admin')).data.find((r: any) => r.id === balls.data.turn)
+    assert.equal(kept.detail.gift, true)
+    assert.equal(kept.detail.balls.length, 5)
+    assert.equal(kept.stake, 5)
+    for (let i = 0; i < 4; i++) assert.equal((await call('POST', '/bet/casino/plinko/drop', 'admin', { gift: true, count: 50 })).status, 200)
+    assert.equal((await call('POST', '/bet/casino/plinko/drop', 'admin', { gift: true, count: 50 })).status, 400, 'only 45 left')
+    assert.equal((await call('GET', '/bet/me', 'admin')).data.gifts.plinko.left, 45, 'a failed drop uses none')
+
     // Every member can see what is left on the house on the member page
     const id = (await call('GET', '/members/me', 'admin')).data.member.id
     assert.deepEqual((await call('GET', `/bet/members/${id}`, 'kari')).data.gifts, {
       sponsorjakten: { left: 0, plays: 10, stake: 25 },
       fyllekjoring: { left: 9, plays: 10, stake: 25 },
+      plinko: { left: 45, plays: 250, stake: 1 },
     })
   })
 })
