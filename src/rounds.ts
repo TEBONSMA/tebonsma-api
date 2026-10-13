@@ -7,7 +7,7 @@ import { takeGift } from './gifts.ts'
 import type { Viewer } from './feed.ts'
 import { MEMBERS } from './flaksGames.ts'
 import { usernameOf } from './members.ts'
-import { drawBall, PLINKO_MAX_BALLS } from './plinko.ts'
+import { drawBall, PLINGO_MAX_BALLS } from './plingo.ts'
 import { payoutOf, playSlot, type SlotResult } from './slot.ts'
 
 // Two more casino games, kept in one table of rounds: Sponsorjakten (the collector slot in slot.ts)
@@ -20,7 +20,7 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS flaks_rounds (
     id         TEXT PRIMARY KEY,
     username   TEXT NOT NULL,
-    game       TEXT NOT NULL CHECK (game IN ('sponsorjakten', 'fyllekjoring', 'plinko')),
+    game       TEXT NOT NULL CHECK (game IN ('sponsorjakten', 'fyllekjoring', 'plingo')),
     stake      INTEGER NOT NULL,
     payout     INTEGER NOT NULL DEFAULT 0,
     status     TEXT NOT NULL DEFAULT 'done' CHECK (status IN ('playing', 'done')),
@@ -36,9 +36,9 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS flaks_rounds_done ON flaks_rounds (status, done_at);
 `)
 
-// A table made before Plinko only knows the first two games: SQLite can't change a CHECK, so the
+// A table made before Plingo only knows the first two games: SQLite can't change a CHECK, so the
 // table is made again with the rows kept
-if (!(db.prepare("SELECT sql FROM sqlite_master WHERE name = 'flaks_rounds'").get() as { sql: string }).sql.includes("'plinko'")) {
+if (!(db.prepare("SELECT sql FROM sqlite_master WHERE name = 'flaks_rounds'").get() as { sql: string }).sql.includes("'plingo'")) {
   transaction(() => {
     db.exec(`
       DROP INDEX IF EXISTS flaks_rounds_member;
@@ -47,7 +47,7 @@ if (!(db.prepare("SELECT sql FROM sqlite_master WHERE name = 'flaks_rounds'").ge
       CREATE TABLE flaks_rounds (
         id         TEXT PRIMARY KEY,
         username   TEXT NOT NULL,
-        game       TEXT NOT NULL CHECK (game IN ('sponsorjakten', 'fyllekjoring', 'plinko')),
+        game       TEXT NOT NULL CHECK (game IN ('sponsorjakten', 'fyllekjoring', 'plingo')),
         stake      INTEGER NOT NULL,
         payout     INTEGER NOT NULL DEFAULT 0,
         status     TEXT NOT NULL DEFAULT 'done' CHECK (status IN ('playing', 'done')),
@@ -57,7 +57,7 @@ if (!(db.prepare("SELECT sql FROM sqlite_master WHERE name = 'flaks_rounds'").ge
         created_at TEXT NOT NULL,
         done_at    TEXT
       );
-      INSERT INTO flaks_rounds SELECT id, username, game, stake, payout, status, detail, crash, target, created_at, done_at FROM flaks_rounds_old;
+      INSERT INTO flaks_rounds SELECT id, username, CASE game WHEN 'plinko' THEN 'plingo' ELSE game END, stake, payout, status, detail, crash, target, created_at, done_at FROM flaks_rounds_old;
       DROP TABLE flaks_rounds_old;
       CREATE INDEX flaks_rounds_member ON flaks_rounds (username, status, created_at);
       CREATE INDEX flaks_rounds_done ON flaks_rounds (status, done_at);
@@ -65,7 +65,11 @@ if (!(db.prepare("SELECT sql FROM sqlite_master WHERE name = 'flaks_rounds'").ge
   })
 }
 
-export const ROUND_GAMES = { sponsorjakten: 'Sponsorjakten', fyllekjoring: 'Fyllekjøring', plinko: 'Plinko' } as const
+// The game was first called Plinko: its gifts and ledger rows are renamed
+db.prepare("UPDATE casino_gifts SET game = 'plingo' WHERE game = 'plinko'").run()
+db.prepare("UPDATE bet_ledger SET game = 'Plingo' WHERE game = 'Plinko'").run()
+
+export const ROUND_GAMES = { sponsorjakten: 'Sponsorjakten', fyllekjoring: 'Fyllekjøring', plingo: 'Plingo' } as const
 export type RoundGame = keyof typeof ROUND_GAMES
 
 const DONE_SHOWN = 100
@@ -286,9 +290,9 @@ export async function waitForLanding(viewer: Viewer, id: string) {
 // A free round: the crash point comes along, since nothing is at stake, and the site drives it
 export const tryFlight = () => ({ crash: drawCrash(randomInt) })
 
-// --- Plinko
+// --- Plingo
 
-// A turn (tur) of Plinko is one or more drops of balls, which count as one round in the lists: the
+// A turn (tur) of Plingo is one or more drops of balls, which count as one round in the lists: the
 // balls of a drop, and the drops made while the balls of the turn are still falling. The site
 // keeps the turn's id until its last ball has landed, and sends it along with the next drop.
 // Coins move at once, like the other games of luck.
@@ -296,25 +300,25 @@ export const tryFlight = () => ({ crash: drawCrash(randomInt) })
 // gift: balls on the house, one of the member's rounds on the house each, at its own stake, with
 // nothing taken from the member. A turn is either on the house or not, never both.
 // trial: the same drop for nothing, nothing is taken, paid or kept
-export function dropPlinko(viewer: Viewer, stake: number, count: number, turn: string | null, trial: boolean, gift = false) {
-  if (!Number.isInteger(count) || count < 1 || count > PLINKO_MAX_BALLS) throw bad(`Fra 1 til ${PLINKO_MAX_BALLS} kuler`)
+export function dropPlingo(viewer: Viewer, stake: number, count: number, turn: string | null, trial: boolean, gift = false) {
+  if (!Number.isInteger(count) || count < 1 || count > PLINGO_MAX_BALLS) throw bad(`Fra 1 til ${PLINGO_MAX_BALLS} kuler`)
   if (trial) {
     const balls = Array.from({ length: count }, () => drawBall(stake))
     return { turn: null, balls, stake: stake * count, payout: balls.reduce((sum, ball) => sum + ball.payout, 0) }
   }
   return transaction(() => {
     // What each ball is played at: the stake, or what the gift it uses up is for
-    const stakes = Array.from({ length: count }, () => (gift ? takeGift(viewer.username, 'plinko') : stake))
+    const stakes = Array.from({ length: count }, () => (gift ? takeGift(viewer.username, 'plingo') : stake))
     const staked = stakes.reduce((sum, each) => sum + each, 0)
     if (!gift) ensureCoins(viewer, staked)
     const balls = stakes.map(each => drawBall(each))
     const payout = balls.reduce((sum, ball) => sum + ball.payout, 0)
     const what = count === 1 ? 'Kule' : `${count} kuler`
-    if (!gift) addCasinoRow(viewer.username, -staked, ROUND_GAMES.plinko, what)
-    if (payout > 0) addCasinoRow(viewer.username, payout, ROUND_GAMES.plinko, gift ? `Vant ${payout}, på huset` : `Vant ${payout}`)
+    if (!gift) addCasinoRow(viewer.username, -staked, ROUND_GAMES.plingo, what)
+    if (payout > 0) addCasinoRow(viewer.username, payout, ROUND_GAMES.plingo, gift ? `Vant ${payout}, på huset` : `Vant ${payout}`)
     const multipliers = balls.map(ball => ball.multiplier)
     const open = turn ? findRound(turn) : undefined
-    if (open && open.username === viewer.username && open.game === 'plinko') {
+    if (open && open.username === viewer.username && open.game === 'plingo') {
       const before = JSON.parse(open.detail) as { balls: number[]; gift?: boolean }
       if (Boolean(before.gift) === gift) {
         db.prepare('UPDATE flaks_rounds SET stake = ?, payout = ?, detail = ?, done_at = ? WHERE id = ?').run(
@@ -330,7 +334,7 @@ export function dropPlinko(viewer: Viewer, stake: number, count: number, turn: s
     const row: RoundRow = {
       id: randomUUID(),
       username: viewer.username,
-      game: 'plinko',
+      game: 'plingo',
       stake: staked,
       payout,
       status: 'done',

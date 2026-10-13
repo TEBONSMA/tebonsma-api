@@ -4,10 +4,10 @@ import { pushToAll } from './push.ts'
 
 // Rounds on the house ("på huset"): plays of a casino game a member gets for nothing, at a set
 // stake, with what they win theirs to keep. Given for a reason, once per member and game: so far
-// the launch of Sponsorjakten and Fyllekjøring, ten of each at 25 coins, and of Plinko, 250 balls
+// the launch of Sponsorjakten and Fyllekjøring, ten of each at 25 coins, and of Plingo, 250 balls
 // at 1 coin.
 
-export type GiftGame = 'sponsorjakten' | 'fyllekjoring' | 'plinko' | 'plinko'
+export type GiftGame = 'sponsorjakten' | 'fyllekjoring' | 'plingo'
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS casino_gifts (
@@ -31,7 +31,7 @@ const LAUNCH = {
   games: [
     { game: 'sponsorjakten', stake: 25, plays: 10 },
     { game: 'fyllekjoring', stake: 25, plays: 10 },
-    { game: 'plinko', stake: 1, plays: 250 },
+    { game: 'plingo', stake: 1, plays: 250 },
   ] as { game: GiftGame; stake: number; plays: number }[],
 }
 
