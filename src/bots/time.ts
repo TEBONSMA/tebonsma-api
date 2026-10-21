@@ -18,6 +18,10 @@ export function osloMidnight(date: string) {
 
 export const addDays = (date: string, days: number) => new Date(Date.parse(`${date}T12:00:00Z`) + days * DAY_MS).toISOString().slice(0, 10)
 
+// The hour in Norway, 0 to 23
+export const osloHour = (time: Date) =>
+  Number(new Intl.DateTimeFormat('en-GB', { timeZone: TIME_ZONE, hour: '2-digit', hourCycle: 'h23' }).format(time))
+
 // 0 is Monday
 export const weekday = (date: string) => (new Date(`${date}T12:00:00Z`).getUTCDay() + 6) % 7
 

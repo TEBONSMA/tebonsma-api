@@ -129,6 +129,9 @@ can get a new closing time.
 | POST | `/bet/events/:id/markets` | Open a market: `{ question, kind, outcomes: [{ label, odds }], closesAt, excluded }` |
 | POST | `/bet/groups/:id/markets` | Open a market in a group (admins), same body |
 | POST | `/bet/groups/:id/import` | Import up to 30 markets (admins), all checked before any is made: `{ markets: [{ …a new market, section }] }`. `excluded` may name members by their display name |
+| GET | `/bet/bot/claude` | The bot with Claude (admins): `{ on, model, monthlyUsd, spentUsd }`, what it may spend and has spent this month |
+| POST | `/bet/bot/claude/plan` | Has Claude make markets now rather than on its days (admins): `{ created, skipped }` |
+| POST | `/bet/bot/decide` | Decides the bot's markets whose answer is in now, rather than at the bot's next round (admins) |
 | PATCH | `/bet/markets/:id` | Change `question`, `closesAt` or `excluded` of an undecided market |
 | POST | `/bet/events/:id/sections`, `/bet/groups/:id/sections` | Add a section heading: `{ title }` |
 | PATCH, DELETE | `/bet/sections/:id` | Rename a section (`{ title }`), or remove it; its markets stay, under no section |
@@ -209,6 +212,19 @@ a cancelled match is called off, and so is the scorer market if the player doesn
 the bot found is kept with the market (`note`, `noteUrl`) and shown with it, and so is how it
 decides (`autoRule`). If an admin reopens a market the bot decided, the bot leaves it to them.
 `BOTS=off` keeps the bot from running.
+
+With an Anthropic API key (`ANTHROPIC_API_KEY`) the bot also has **Claude** make markets on the
+news (`src/bots/claude.ts`). On Mondays and Thursdays from nine in the morning, Norwegian time,
+it asks Claude (`CLAUDE_MODEL`) with web search for five to eight new markets for the group
+`CLAUDE_GROUP` (by id or title, made if there is none). They are checked like an import and
+against the bot's own rules (open at least an hour, the answer in within a month, a rule for how
+it is decided) and opened at once; the ones that fail are left out and logged. Each keeps how it
+is decided and when the answer should be in. From then on Claude looks the answer up, at most
+every twelve hours and eight times in all, and decides the market with a note and a link, calls
+it off, or leaves it to the admins. Every call is counted in dollars (table `claude_usage`), and
+the bot stops for the month at `CLAUDE_MONTHLY_USD`. A question the model declines is run on
+another model instead (server-side fallback). The tests stand in for Claude, so they never
+reach Anthropic.
 
 **Flaks** (`src/flaks.ts`, `src/flaksGames.ts`) are games of pure luck that settle at once:
 scratch cards and roulette. A scratch card's prize is drawn by its odds when it is bought, like
@@ -437,6 +453,11 @@ the API posts to whatever address it is given. A subscription the push service s
 | `ADMIN_GROUP` | `lldap_admin` | Group whose members moderate the feed |
 | `MEMBER_GROUP` | `medlemmer` | Group of the members of TEBONSMA, for TebBet's list of members |
 | `BOTS` | on | `off` keeps TebBet's bot from running (it is off in `npm run dev:mock` unless started with `--bots`) |
+| `ANTHROPIC_API_KEY` | none | Key for the Claude API. Without it the bot makes no markets with Claude |
+| `CLAUDE_MODEL` | `claude-opus-5-5` | The model the bot asks |
+| `CLAUDE_GROUP` | `Nyheter` | The group Claude's markets go in, by its id or its title |
+| `CLAUDE_MONTHLY_USD` | `20` | What the bot may spend with Claude in a calendar month, by its own count |
+| `CLAUDE_MIN_OPEN_SECONDS` | `3600` | How long a market Claude makes must stay open at least. Shorter lets you try it out |
 | `BOT_ODDS_DAYS`, `BOT_ELO_DAYS` | `14`, `3` | Days before kickoff the bot looks for bookmaker odds, and opens with Elo odds without them. Larger values let you try it out |
 | `MAIL_IMAP_HOST`, `MAIL_IMAP_PORT` | `mail.tebonsma.no`, `993` | Where mail is read (TLS from the start) |
 | `MAIL_SMTP_HOST`, `MAIL_SMTP_PORT` | `mail.tebonsma.no`, `465` | Where mail is sent |
