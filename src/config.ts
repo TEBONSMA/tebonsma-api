@@ -36,6 +36,19 @@ function pushConfig() {
   return { publicKey, privateKey, subject: process.env.VAPID_SUBJECT ?? 'https://tebonsma.no' }
 }
 
+// TebBet's bot has Claude make markets on the news and decide them, with an API key at
+// Anthropic. Without the key that part of the bot is off.
+function claudeConfig() {
+  if (!process.env.ANTHROPIC_API_KEY) return null
+  return {
+    model: process.env.CLAUDE_MODEL ?? 'claude-opus-5-5',
+    // The group the markets go in, by its id or its title
+    group: process.env.CLAUDE_GROUP ?? 'Nyheter',
+    // What the bot may spend in a calendar month, in US dollars, by its own count
+    monthlyUsd: Number(process.env.CLAUDE_MONTHLY_USD ?? 20),
+  }
+}
+
 const allowedOrigins = (process.env.ALLOWED_ORIGINS ?? 'https://tebonsma.no')
   .split(',')
   .map(origin => origin.trim())
@@ -64,6 +77,7 @@ export const config = {
     offline: offlineConfig(userinfoUrl, allowedOrigins[0] ?? 'https://tebonsma.no'),
   },
   push: pushConfig(),
+  claude: claudeConfig(),
   lldap: {
     url: (process.env.LLDAP_URL ?? 'http://lldap:17170').replace(/\/$/, ''),
     username: required('LLDAP_USERNAME'),
