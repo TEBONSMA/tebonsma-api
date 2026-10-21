@@ -873,7 +873,8 @@ describe('the bot with Claude', () => {
     assert.equal((await call('POST', '/bet/bot/claude/plan', 'kari')).status, 403)
     assert.deepEqual((await call('GET', '/bet/bot/claude', 'admin')).data, { on: true, model: 'claude-opus-5-5', monthlyUsd: 20, spentUsd: 0 })
 
-    const soon = new Date(Date.now() + 2500).toISOString()
+    // The snow market closes soon, but with time to be made and played on, also on a slow machine
+    const soon = new Date(Date.now() + 8000).toISOString()
     const later = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString()
     const blank = { winners: null, line: null, lowest: null, highest: null, spread: null }
     const snow = {
@@ -924,7 +925,7 @@ describe('the bot with Claude', () => {
     const played = await call('POST', '/bet/slips', 'kari', { slips: [{ stake: 10, selections: [{ outcomeId: yes.id, odds: yes.odds }] }] })
     assert.equal(played.status, 201, JSON.stringify(played.data))
 
-    await sleep(3000)
+    await sleep(Date.parse(soon) - Date.now() + 500)
     claudeVerdict = { result: 'avgjort', outcome: 0, outcomes: [], value: null, note: 'Det kom snø 28. oktober.', url: 'https://www.yr.no/snø' }
     assert.equal((await call('POST', '/bet/bot/decide', 'admin')).status, 200)
     const decision = claudeAsked.at(-1)
