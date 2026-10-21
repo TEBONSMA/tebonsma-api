@@ -60,6 +60,9 @@ import { INSIDE_TYPES, isInsideBet, ROULETTE_TYPES, type RouletteBet, type Roule
 import { currentFlight, launch, rounds, roundsOfMember, spinSlot, takeOut, tryFlight, waitForLanding } from './rounds.ts'
 import { MAX_CRASH } from './crash.ts'
 import { bad, readBody, viewerOf } from './feedRoutes.ts'
+import { planClaude, spentThisMonth } from './bots/claude.ts'
+import { decideAll } from './bots/index.ts'
+import { config } from './config.ts'
 import { MAX_OUTCOMES, MAX_QUESTION_LENGTH, readExcluded, readImport, readLine, readMarket, readSectionTitle, readTime } from './marketInput.ts'
 
 const MAX_SLIPS = 20
@@ -241,6 +244,28 @@ betRoutes.post('/bet/groups/:id/import', async c => {
     createMarket(viewer, container, { ...market, sectionId: section && sectionNamed(viewer, container, section).id }),
   )
   return c.json({ created: markets.length }, 201)
+})
+// The bot with Claude, for admins: what it may spend and has spent this month, and a round now
+// rather than on its days, making markets or deciding the bot's markets whose answer is out
+const assertBotAdmin = (viewer: { admin: boolean }) => {
+  if (!viewer.admin) throw new HTTPException(403, { message: 'Bare administratorer kan styre boten' })
+}
+betRoutes.get('/bet/bot/claude', c => {
+  assertBotAdmin(viewerOf(c))
+  const claude = config.claude
+  return c.json(claude ? { on: true, model: claude.model, monthlyUsd: claude.monthlyUsd, spentUsd: spentThisMonth() } : { on: false })
+})
+betRoutes.post('/bet/bot/claude/plan', async c => {
+  assertBotAdmin(viewerOf(c))
+  if (!config.claude) throw bad('Claude-boten er ikke satt opp')
+  const made = await planClaude(true)
+  if (!made) throw bad('Boten lager spill akkurat nå, eller har brukt opp budsjettet for måneden')
+  return c.json(made, 201)
+})
+betRoutes.post('/bet/bot/decide', async c => {
+  assertBotAdmin(viewerOf(c))
+  await decideAll()
+  return c.json({ ok: true })
 })
 // What the site before groups asked for: the markets outside events
 betRoutes.get('/bet/other', async c => c.json(await getGroup(viewerOf(c), DEFAULT_GROUP)))
