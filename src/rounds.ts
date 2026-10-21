@@ -248,7 +248,9 @@ export async function waitForLanding(viewer: Viewer, id: string) {
   if (row.status === 'playing') {
     const end = launchedAt(row) + timeAt(row.target !== null && row.target < row.crash! ? row.target : row.crash!)
     await sleep(Math.max(0, end - Date.now()))
-    transaction(() => settleIfLanded(findRound(id)!))
+    // A timer can go off a millisecond before the clock gets there, and the round must be over
+    // when this answers
+    transaction(() => settleIfLanded(findRound(id)!, Math.max(Date.now(), end)))
   }
   return toFlight(findRound(id)!)
 }
