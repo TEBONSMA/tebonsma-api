@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { spawn, type ChildProcess } from 'node:child_process'
+import { createServer, type Server } from 'node:http'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -10,6 +11,7 @@ import { after, before, describe, it } from 'node:test'
 
 const PORT = 18787
 const MOCK_AUTH_PORT = 19091
+const CLAUDE_PORT = 19393
 const API = `http://127.0.0.1:${PORT}`
 const ORIGIN = 'http://localhost:5173'
 
@@ -19,6 +21,55 @@ let dataDir: string
 const pushes: { endpoint: string; title: string; body: string; url: string; tag?: string }[] = []
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+
+// Claude, as the bot sees it, so the tests never reach Anthropic: making markets pauses once on
+// the way and then delivers the markets the test has set, and a decision is the answer the test
+// has set. Every question is kept to look at.
+let claudeMarkets: unknown[] = []
+let claudeVerdict: Record<string, unknown> = {}
+const claudeAsked: any[] = []
+let claudeServer: Server
+
+function startClaude() {
+  claudeServer = createServer((req, res) => {
+    let body = ''
+    req.on('data', chunk => (body += chunk))
+    req.on('end', () => {
+      const request = JSON.parse(body)
+      claudeAsked.push(request)
+      const tool = request.tools.find((t: any) => t.name === 'lag_spill' || t.name === 'avgjor')
+      const pause = tool.name === 'lag_spill' && request.messages.at(-1).role === 'user'
+      const input = tool.name === 'lag_spill' ? { markets: claudeMarkets } : claudeVerdict
+      // $0.04 in, $0.04 out and three searches at $0.01: $0.11 a question
+      const usage = {
+        input_tokens: 10_000,
+        output_tokens: 2_000,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+        server_tool_use: { web_search_requests: 3, web_fetch_requests: 0 },
+      }
+      const [block, delta] = pause
+        ? [{ type: 'text', text: '' }, { type: 'text_delta', text: 'Søker videre …' }]
+        : [
+            { type: 'tool_use', id: `toolu_${claudeAsked.length}`, name: tool.name, input: {} },
+            { type: 'input_json_delta', partial_json: JSON.stringify(input) },
+          ]
+      const message = { id: `msg_${claudeAsked.length}`, type: 'message', role: 'assistant', model: request.model, content: [] }
+      // The answer streams, as the real one does
+      const events: [string, object][] = [
+        ['message_start', { message: { ...message, stop_reason: null, stop_sequence: null, usage } }],
+        ['content_block_start', { index: 0, content_block: block }],
+        ['content_block_delta', { index: 0, delta }],
+        ['content_block_stop', { index: 0 }],
+        ['message_delta', { delta: { stop_reason: pause ? 'pause_turn' : 'tool_use', stop_sequence: null }, usage }],
+        ['message_stop', {}],
+      ]
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' })
+      res.end(events.map(([type, data]) => `event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`).join(''))
+    })
+  })
+  return new Promise<void>(resolve => claudeServer.listen(CLAUDE_PORT, '127.0.0.1', resolve))
+}
 
 interface Reply<T = any> {
   status: number
@@ -58,6 +109,7 @@ async function until<T>(read: () => Promise<T>, ok: (value: T) => boolean, secon
 }
 
 before(async () => {
+  await startClaude()
   dataDir = mkdtempSync(join(tmpdir(), 'tebonsma-api-test-'))
   server = spawn(process.execPath, ['dev/server.ts'], {
     env: {
@@ -71,6 +123,10 @@ before(async () => {
       NEW_MARKETS_CHECK_SECONDS: '1',
       // Fyllekjøring's multiplier climbs 50 times as fast: 250x in about a second
       CRASH_SPEED: '50',
+      // The bot's Claude is the stand-in above, and its markets may close within seconds
+      ANTHROPIC_API_KEY: 'test-key',
+      ANTHROPIC_BASE_URL: `http://127.0.0.1:${CLAUDE_PORT}`,
+      CLAUDE_MIN_OPEN_SECONDS: '1',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
@@ -100,6 +156,7 @@ after(async () => {
     await exited
   }
   rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
+  claudeServer?.close()
 })
 
 describe('login', () => {
@@ -808,5 +865,81 @@ describe('push notifications', () => {
     })
     await sleep(500)
     assert.equal(pushedTo('dev-teb').length, before)
+  })
+})
+
+describe('the bot with Claude', () => {
+  it('makes markets from what Claude finds, checked like an import, and decides them', async () => {
+    assert.equal((await call('POST', '/bet/bot/claude/plan', 'kari')).status, 403)
+    assert.deepEqual((await call('GET', '/bet/bot/claude', 'admin')).data, { on: true, model: 'claude-opus-5-5', monthlyUsd: 20, spentUsd: 0 })
+
+    const soon = new Date(Date.now() + 2500).toISOString()
+    const later = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString()
+    const blank = { winners: null, line: null, lowest: null, highest: null, spread: null }
+    const snow = {
+      ...blank,
+      question: 'Kommer det snø i Trondheim før 1. november?',
+      kind: 'yesno',
+      outcomes: [{ label: 'Ja', odds: 2.5 }, { label: 'Nei', odds: 1.67 }],
+      closesAt: soon,
+      decideAfter: soon,
+      how: 'Ja hvis Meteorologisk institutt melder snødekke i Trondheim.',
+      sources: ['https://www.yr.no', 'ikke en lenke'],
+    }
+    claudeMarkets = [
+      snow,
+      {
+        ...blank,
+        question: 'Hvor mange mål blir det i Eliteserien i helgen?',
+        kind: 'overunder',
+        outcomes: [],
+        line: 22.5,
+        lowest: 5,
+        highest: 45,
+        spread: 'low',
+        closesAt: later,
+        decideAfter: later,
+        how: 'Summen av målene i serierunden, ifølge NTB.',
+        sources: [],
+      },
+      { ...snow, question: 'Bare ett utfall?', kind: 'choice', outcomes: [{ label: 'Rosenborg', odds: 2 }] },
+      { ...snow, question: 'Kommer det snø i Trondheim før 1. november?!' },
+    ]
+    const made = await call('POST', '/bet/bot/claude/plan', 'admin')
+    assert.equal(made.status, 201, JSON.stringify(made.data))
+    assert.deepEqual(made.data, { created: 2, skipped: 2 }, 'one with a single outcome, and the same question again')
+
+    const [asked, resumed] = claudeAsked
+    assert.equal(asked.model, 'claude-opus-5-5')
+    assert.equal(asked.fallbacks, 'default')
+    assert.ok(asked.tools.some((t: any) => t.type === 'web_search_20260209'))
+    assert.equal(resumed.messages.at(-1).role, 'assistant', 'a paused search goes on where it stopped')
+
+    const group = (await call('GET', '/bet/groups/claude', 'kari')).data
+    assert.equal(group.title, 'Nyheter')
+    const market = group.markets.find((m: any) => m.question === snow.question)
+    assert.equal(market.autoRule, `Avgjøres automatisk av Claude: ${snow.how}`)
+    const yes = market.outcomes[0]
+    const before = (await call('GET', '/bet/me', 'kari')).data.balance
+    const played = await call('POST', '/bet/slips', 'kari', { slips: [{ stake: 10, selections: [{ outcomeId: yes.id, odds: yes.odds }] }] })
+    assert.equal(played.status, 201, JSON.stringify(played.data))
+
+    await sleep(3000)
+    claudeVerdict = { result: 'avgjort', outcome: 0, outcomes: [], value: null, note: 'Det kom snø 28. oktober.', url: 'https://www.yr.no/snø' }
+    assert.equal((await call('POST', '/bet/bot/decide', 'admin')).status, 200)
+    const decision = claudeAsked.at(-1)
+    assert.match(decision.messages[0].content, /0: Ja\n1: Nei/)
+    assert.equal(claudeAsked.filter(r => r.tools.some((t: any) => t.name === 'avgjor')).length, 1, 'only the market that is due')
+
+    const after = (await call('GET', '/bet/groups/claude', 'kari')).data.markets
+    const decided = after.find((m: any) => m.question === snow.question)
+    assert.equal(decided.state, 'settled')
+    assert.equal(decided.note, 'Det kom snø 28. oktober.')
+    assert.equal(decided.noteUrl, 'https://www.yr.no/snø')
+    assert.equal(after.find((m: any) => m.kind === 'overunder').state, 'open')
+    assert.ok((await call('GET', '/bet/me', 'kari')).data.balance > before, 'the slip on Ja won')
+
+    // Three questions at $0.11
+    assert.equal((await call('GET', '/bet/bot/claude', 'admin')).data.spentUsd.toFixed(2), '0.33')
   })
 })
