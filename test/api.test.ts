@@ -989,6 +989,51 @@ describe('The Tebonsma Times and Tebonsma Tidsskrift', () => {
     assert.ok((await call('GET', '/press/tidsskrift/articles', null)).data.articles.every((a: any) => a.id !== made.id), 'each paper has its own')
   })
 
+  it('publishes at a set time, out of sight until then', async () => {
+    const made = (await call('POST', '/press/times/desk', 'petter', article('Sommerfesten er avlyst', { visibility: 'public', section: 'Fest' }))).data
+    const path = `/press/times/desk/${made.id}/publish`
+    assert.equal((await call('POST', path, 'petter', { at: new Date(Date.now() - 5 * 60_000).toISOString() })).status, 400, 'not in the past')
+    assert.equal((await call('POST', path, 'petter', { at: 'snart' })).status, 400)
+    const at = new Date(Date.now() + 1500).toISOString()
+    const scheduled = await call('POST', path, 'petter', { at })
+    assert.equal(scheduled.status, 200, JSON.stringify(scheduled.data))
+    assert.equal(scheduled.data.scheduled, true)
+    assert.equal(scheduled.data.publishedAt, at)
+    const renamed = await call('PUT', `/press/times/desk/${made.id}`, 'petter', article('Sommerfesten er avlyst likevel', { visibility: 'public', section: 'Fest' }))
+    assert.equal(renamed.data.slug, 'sommerfesten-er-avlyst-likevel', 'the address follows the title until it is out')
+    const slug = renamed.data.slug
+    assert.equal((await call('PUT', '/press/times/front', 'petter', { ids: [made.id] })).status, 200, 'it may be placed on the front page already')
+    const hidden = async (who: string | null) => {
+      assert.equal((await call('GET', `/press/times/articles/${slug}`, who)).status, 404)
+      assert.ok((await call('GET', '/press/times/articles', who)).data.articles.every((a: any) => a.id !== made.id))
+      const front = (await call('GET', '/press/times/front', who)).data
+      assert.ok([...front.front, ...front.latest].every((a: any) => a.id !== made.id))
+    }
+    await hidden(null)
+    await hidden('kari')
+    assert.ok((await call('GET', '/press/times/sections', null)).data.every((s: any) => s.section !== 'Fest'))
+    assert.equal((await call('GET', `/press/times/articles/${slug}`, 'petter')).data.scheduled, true, 'the editors can look at it')
+    await new Promise(resolve => setTimeout(resolve, 1600))
+    const out = await call('GET', `/press/times/articles/${slug}`, null)
+    assert.equal(out.status, 200)
+    assert.equal(out.data.scheduled, false)
+    assert.equal((await call('GET', '/press/times/front', null)).data.front[0].id, made.id, 'on the front page when it is out')
+    assert.equal((await call('POST', path, 'petter', { at: new Date(Date.now() + 60_000).toISOString() })).status, 400, 'what is out stays out')
+  })
+
+  it('publishes at once what was set for later', async () => {
+    const made = (await call('POST', '/press/times/desk', 'petter', article('Planlagt, men ikke lenger'))).data
+    await call('POST', `/press/times/desk/${made.id}/publish`, 'petter', { at: new Date(Date.now() + 3_600_000).toISOString() })
+    const now = await call('POST', `/press/times/desk/${made.id}/publish`, 'petter')
+    assert.equal(now.data.scheduled, false)
+    assert.ok(Date.parse(now.data.publishedAt) <= Date.now())
+    const later = (await call('POST', '/press/times/desk', 'petter', article('Avbrutt planlegging'))).data
+    await call('POST', `/press/times/desk/${later.id}/publish`, 'petter', { at: new Date(Date.now() + 3_600_000).toISOString() })
+    const back = await call('POST', `/press/times/desk/${later.id}/unpublish`, 'petter')
+    assert.equal(back.data.status, 'draft')
+    assert.equal(back.data.scheduled, false)
+  })
+
   it('arranges the front page, with only published articles', async () => {
     const one = (await call('POST', '/press/times/desk', 'petter', article('Toppsak', { visibility: 'public' }))).data
     const two = (await call('POST', '/press/times/desk', 'petter', article('Nummer to', { visibility: 'public' }))).data
