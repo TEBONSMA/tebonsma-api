@@ -1035,6 +1035,16 @@ describe('The Tebonsma Times and Tebonsma Tidsskrift', () => {
     assert.equal((await call('GET', `/press/times/articles/${made.slug}`, null)).status, 200, 'out at once')
   })
 
+  it('lets an author go by another name in one article', async () => {
+    const members = (await call('GET', '/press/times/desk/members', 'petter')).data
+    const petter = members.find((m: any) => m.name === 'Petter Redaktør')
+    const kari = members.find((m: any) => m.name === 'Kari Nordmann')
+    const made = await call('POST', '/press/times/desk', 'petter', article('Med kallenavn', { authors: [{ id: petter.id, alias: 'Abraham' }, kari.id] }))
+    assert.equal(made.status, 201, JSON.stringify(made.data))
+    assert.deepEqual(made.data.authors.map((a: any) => [a.id, a.name, a.alias]), [[petter.id, 'Petter Redaktør', 'Abraham'], [kari.id, 'Kari Nordmann', null]])
+    assert.equal((await call('POST', '/press/times/desk', 'petter', article('Uten forfatter', { authors: [{ alias: 'Ingen' }] }))).status, 400)
+  })
+
   it('publishes at once what was set for later', async () => {
     const made = (await call('POST', '/press/times/desk', 'petter', article('Planlagt, men ikke lenger'))).data
     await call('POST', `/press/times/desk/${made.id}/publish`, 'petter', { at: new Date(Date.now() + 3_600_000).toISOString() })

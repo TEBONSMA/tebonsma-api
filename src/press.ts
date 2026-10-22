@@ -41,7 +41,8 @@ db.exec(`
     -- Cleaned HTML (see cleanBody)
     body           TEXT NOT NULL DEFAULT '',
     tags           TEXT NOT NULL DEFAULT '[]',
-    -- Usernames, in byline order
+    -- In byline order: { username, alias } with the name to give them in this article if not their
+    -- own (plain usernames in articles from before that)
     authors        TEXT NOT NULL DEFAULT '[]',
     cover_image    TEXT,
     cover_caption  TEXT NOT NULL DEFAULT '',
@@ -157,8 +158,16 @@ function uniqueSlug(publication: Publication, title: string, except: string | nu
 
 // --- What the sites get
 
+interface StoredAuthor {
+  username: string
+  alias?: string
+}
+
+const storedAuthors = (raw: string) =>
+  (JSON.parse(raw) as (string | StoredAuthor)[]).map(author => (typeof author === 'string' ? { username: author } : author))
+
 async function toArticles(rows: ArticleRow[], withBody: boolean) {
-  const members = await getMembers(rows.flatMap(row => JSON.parse(row.authors) as string[]))
+  const members = await getMembers(rows.flatMap(row => storedAuthors(row.authors).map(author => author.username)))
   const time = now()
   return rows.map(row => {
     return {
@@ -172,7 +181,11 @@ async function toArticles(rows: ArticleRow[], withBody: boolean) {
       lead: row.lead,
       body: withBody ? row.body : null,
       tags: JSON.parse(row.tags) as string[],
-      authors: (JSON.parse(row.authors) as string[]).map(username => members.get(username)!).filter(Boolean),
+      // Each the member, and the name they go by in this article (null for their own)
+      authors: storedAuthors(row.authors).flatMap(({ username, alias }) => {
+        const member = members.get(username)
+        return member ? [{ ...member, alias: alias ?? null }] : []
+      }),
       coverImage: row.cover_image ? `/press/images/${row.cover_image}` : null,
       coverCaption: row.cover_caption,
       frontPosition: row.front_position,
@@ -307,24 +320,30 @@ export async function getForEditing(publication: Publication, id: string, caller
   return (await toArticles([findRow(publication, id)], true))[0]
 }
 
+// A public member id, and the name to give them in this article if not their own
+export interface ArticleAuthor {
+  id: string
+  alias?: string | null
+}
+
 export interface ArticleInput {
   title: string
   section: string
   lead: string
   body: string
   tags: string[]
-  // Public member ids, in byline order
-  authors: string[]
+  // In byline order
+  authors: ArticleAuthor[]
   visibility: 'public' | 'members'
   coverImage: string | null
   coverCaption: string
 }
 
-const authorsOf = (ids: string[]) =>
-  ids.map(id => {
+const authorsOf = (authors: ArticleAuthor[]): StoredAuthor[] =>
+  authors.map(({ id, alias }) => {
     const username = usernameOf(id)
     if (!username) throw bad('Fant ikke en av forfatterne')
-    return username
+    return alias ? { username, alias } : { username }
   })
 
 const imageIdOf = (raw: string | null) => {

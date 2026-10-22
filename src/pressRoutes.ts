@@ -25,6 +25,7 @@ import {
   setMenu,
   setPublished,
   updateArticle,
+  type ArticleAuthor,
   type ArticleInput,
   type Publication,
 } from './press.ts'
@@ -83,6 +84,14 @@ function readArticle(body: Record<string, unknown>): ArticleInput {
     return raw as string[]
   }
   const tags = [...new Set(list(body.tags, 'stikkord', 10).map(tag => readLine(tag, 'Stikkordet', 30)).filter(Boolean))]
+  // Each a public member id, or { id, alias } with the name to give them in this article
+  if (body.authors !== undefined && (!Array.isArray(body.authors) || body.authors.length > 10)) throw bad('Ugyldig liste med forfattere')
+  const authors = ((body.authors ?? []) as unknown[]).map((item): ArticleAuthor => {
+    if (typeof item === 'string') return { id: item }
+    const author = item as { id?: unknown; alias?: unknown } | null
+    if (!author || typeof author.id !== 'string') throw bad('Ugyldig forfatter')
+    return { id: author.id, alias: readLine(author.alias ?? '', 'Navnet', 80) || null }
+  })
   const visibility = body.visibility ?? 'members'
   if (visibility !== 'public' && visibility !== 'members') throw bad('Ugyldig synlighet')
   if (body.coverImage !== undefined && body.coverImage !== null && typeof body.coverImage !== 'string') throw bad('Ugyldig bilde')
@@ -92,7 +101,7 @@ function readArticle(body: Record<string, unknown>): ArticleInput {
     lead: readText(body.lead ?? '', 'Ingressen', 600),
     body: body.body,
     tags,
-    authors: list(body.authors, 'forfattere', 10),
+    authors,
     visibility,
     coverImage: (body.coverImage as string | null | undefined) ?? null,
     coverCaption: readLine(body.coverCaption ?? '', 'Bildeteksten', 300),
