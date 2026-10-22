@@ -42,10 +42,12 @@ db.exec(`
     body           TEXT NOT NULL DEFAULT '',
     tags           TEXT NOT NULL DEFAULT '[]',
     -- In byline order: { username, alias } with the name to give them in this article if not their
-    -- own (plain usernames in articles from before that)
+    -- own, or { name } for an author without an account (plain usernames in articles from before)
     authors        TEXT NOT NULL DEFAULT '[]',
     cover_image    TEXT,
     cover_caption  TEXT NOT NULL DEFAULT '',
+    -- The journal's own numbering, as printed ("1/2025"); empty for the month it came out
+    issue          TEXT NOT NULL DEFAULT '',
     -- Its place on the front page, 0 at the top; null when it isn't there
     front_position INTEGER,
     created_by     TEXT NOT NULL,
@@ -74,6 +76,11 @@ db.exec(`
   );
 `)
 
+// The issue came after the first articles
+if (!(db.prepare('PRAGMA table_info(press_articles)').all() as { name: string }[]).some(column => column.name === 'issue')) {
+  db.exec("ALTER TABLE press_articles ADD COLUMN issue TEXT NOT NULL DEFAULT ''")
+}
+
 const bad = (message: string) => new HTTPException(400, { message })
 const now = () => new Date().toISOString()
 const LATEST = 20
@@ -94,6 +101,7 @@ interface ArticleRow {
   authors: string
   cover_image: string | null
   cover_caption: string
+  issue: string
   front_position: number | null
   created_by: string
   created_at: string
@@ -159,15 +167,25 @@ function uniqueSlug(publication: Publication, title: string, except: string | nu
 // --- What the sites get
 
 interface StoredAuthor {
-  username: string
+  username?: string
   alias?: string
+  // An author without an account: only a name
+  name?: string
+}
+
+// As the sites get them: a member, or a name without an account (id null)
+interface AuthorOut {
+  id: string | null
+  name: string
+  avatar: string | null
+  alias: string | null
 }
 
 const storedAuthors = (raw: string) =>
   (JSON.parse(raw) as (string | StoredAuthor)[]).map(author => (typeof author === 'string' ? { username: author } : author))
 
 async function toArticles(rows: ArticleRow[], withBody: boolean) {
-  const members = await getMembers(rows.flatMap(row => storedAuthors(row.authors).map(author => author.username)))
+  const members = await getMembers(rows.flatMap(row => storedAuthors(row.authors).flatMap(author => (author.username ? [author.username] : []))))
   const time = now()
   return rows.map(row => {
     return {
@@ -181,13 +199,16 @@ async function toArticles(rows: ArticleRow[], withBody: boolean) {
       lead: row.lead,
       body: withBody ? row.body : null,
       tags: JSON.parse(row.tags) as string[],
-      // Each the member, and the name they go by in this article (null for their own)
-      authors: storedAuthors(row.authors).flatMap(({ username, alias }) => {
+      // Each the member and the name they go by in this article (null for their own), or a name
+      // without an account (id null)
+      authors: storedAuthors(row.authors).flatMap(({ username, alias, name }): AuthorOut[] => {
+        if (!username) return name ? [{ id: null, name, avatar: null, alias: null }] : []
         const member = members.get(username)
         return member ? [{ ...member, alias: alias ?? null }] : []
       }),
       coverImage: row.cover_image ? `/press/images/${row.cover_image}` : null,
       coverCaption: row.cover_caption,
+      issue: row.issue,
       frontPosition: row.front_position,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
@@ -320,11 +341,9 @@ export async function getForEditing(publication: Publication, id: string, caller
   return (await toArticles([findRow(publication, id)], true))[0]
 }
 
-// A public member id, and the name to give them in this article if not their own
-export interface ArticleAuthor {
-  id: string
-  alias?: string | null
-}
+// A public member id and the name to give them in this article if not their own, or the name of an
+// author without an account
+export type ArticleAuthor = { id: string; alias?: string | null } | { name: string }
 
 export interface ArticleInput {
   title: string
@@ -337,13 +356,16 @@ export interface ArticleInput {
   visibility: 'public' | 'members'
   coverImage: string | null
   coverCaption: string
+  // The journal's numbering, as printed ("1/2025"), or empty
+  issue: string
 }
 
 const authorsOf = (authors: ArticleAuthor[]): StoredAuthor[] =>
-  authors.map(({ id, alias }) => {
-    const username = usernameOf(id)
+  authors.map(author => {
+    if ('name' in author) return { name: author.name }
+    const username = usernameOf(author.id)
     if (!username) throw bad('Fant ikke en av forfatterne')
-    return alias ? { username, alias } : { username }
+    return author.alias ? { username, alias: author.alias } : { username }
   })
 
 const imageIdOf = (raw: string | null) => {
@@ -357,8 +379,8 @@ export async function createArticle(publication: Publication, caller: Caller, in
   const id = randomUUID()
   const time = now()
   db.prepare(
-    `INSERT INTO press_articles (id, publication, slug, visibility, section, title, lead, body, tags, authors, cover_image, cover_caption, created_by, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO press_articles (id, publication, slug, visibility, section, title, lead, body, tags, authors, cover_image, cover_caption, issue, created_by, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     publication,
@@ -372,6 +394,7 @@ export async function createArticle(publication: Publication, caller: Caller, in
     JSON.stringify(authorsOf(input.authors)),
     imageIdOf(input.coverImage),
     input.coverCaption,
+    input.issue,
     caller.username,
     time,
     time,
@@ -385,7 +408,7 @@ export async function updateArticle(publication: Publication, id: string, caller
   const slug = isLive(row) ? row.slug : uniqueSlug(publication, input.title, id)
   db.prepare(
     `UPDATE press_articles SET slug = ?, visibility = ?, section = ?, title = ?, lead = ?, body = ?, tags = ?, authors = ?,
-       cover_image = ?, cover_caption = ?, updated_at = ? WHERE id = ?`,
+       cover_image = ?, cover_caption = ?, issue = ?, updated_at = ? WHERE id = ?`,
   ).run(
     slug,
     input.visibility,
@@ -397,6 +420,7 @@ export async function updateArticle(publication: Publication, id: string, caller
     JSON.stringify(authorsOf(input.authors)),
     imageIdOf(input.coverImage),
     input.coverCaption,
+    input.issue,
     now(),
     id,
   )

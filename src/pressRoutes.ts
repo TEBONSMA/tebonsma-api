@@ -84,13 +84,19 @@ function readArticle(body: Record<string, unknown>): ArticleInput {
     return raw as string[]
   }
   const tags = [...new Set(list(body.tags, 'stikkord', 10).map(tag => readLine(tag, 'Stikkordet', 30)).filter(Boolean))]
-  // Each a public member id, or { id, alias } with the name to give them in this article
+  // Each a public member id, { id, alias } with the name to give them in this article, or { name }
+  // for an author without an account
   if (body.authors !== undefined && (!Array.isArray(body.authors) || body.authors.length > 10)) throw bad('Ugyldig liste med forfattere')
   const authors = ((body.authors ?? []) as unknown[]).map((item): ArticleAuthor => {
     if (typeof item === 'string') return { id: item }
-    const author = item as { id?: unknown; alias?: unknown } | null
-    if (!author || typeof author.id !== 'string') throw bad('Ugyldig forfatter')
-    return { id: author.id, alias: readLine(author.alias ?? '', 'Navnet', 80) || null }
+    const author = item as { id?: unknown; alias?: unknown; name?: unknown } | null
+    if (author && typeof author.id === 'string') return { id: author.id, alias: readLine(author.alias ?? '', 'Navnet', 80) || null }
+    if (author && author.id == null && author.name !== undefined) {
+      const name = readLine(author.name, 'Navnet', 80)
+      if (!name) throw bad('Forfatteren trenger et navn')
+      return { name }
+    }
+    throw bad('Ugyldig forfatter')
   })
   const visibility = body.visibility ?? 'members'
   if (visibility !== 'public' && visibility !== 'members') throw bad('Ugyldig synlighet')
@@ -105,6 +111,7 @@ function readArticle(body: Record<string, unknown>): ArticleInput {
     visibility,
     coverImage: (body.coverImage as string | null | undefined) ?? null,
     coverCaption: readLine(body.coverCaption ?? '', 'Bildeteksten', 300),
+    issue: readLine(body.issue ?? '', 'Utgaven', 20),
   }
 }
 

@@ -20,7 +20,7 @@ function photo(publication: Publication, caller: Caller, name: string) {
 
 const p = (...paragraphs: string[]) => paragraphs.map(text => (text.startsWith('<') ? text : `<p>${text}</p>`)).join('')
 
-type Seed = Omit<ArticleInput, 'coverImage' | 'tags' | 'coverCaption'> & { photo?: string; caption?: string; tags?: string[]; front?: number; draft?: boolean }
+type Seed = Omit<ArticleInput, 'coverImage' | 'tags' | 'coverCaption' | 'issue'> & { photo?: string; caption?: string; tags?: string[]; front?: number; draft?: boolean }
 
 async function seed(publication: Publication, caller: Caller, articles: Seed[]) {
   const ids: { id: string; front?: number }[] = []
@@ -31,6 +31,7 @@ async function seed(publication: Publication, caller: Caller, articles: Seed[]) 
       tags: article.tags ?? [],
       coverImage: article.photo ? photo(publication, caller, article.photo) : null,
       coverCaption: article.caption ?? '',
+      issue: '',
     })
     if (!article.draft) await setPublished(publication, made.id, caller, true)
     ids.push({ id: made.id, front: article.front })
