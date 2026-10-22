@@ -22,8 +22,8 @@ process.env.LLDAP_PASSWORD ??= 'mock'
 process.env.SITE_URL ??= 'http://localhost:5173'
 // The bot reads the news and ESPN; only with --bots
 if (!process.argv.includes('--bots')) process.env.BOTS ??= 'off'
-// The site and TebBet (bet.tebonsma.no) on their own dev ports
-process.env.ALLOWED_ORIGINS ??= 'http://localhost:5173,http://localhost:5174'
+// The site, TebBet (bet.tebonsma.no), The Tebonsma Times and Tebonsma Tidsskrift on their own dev ports
+process.env.ALLOWED_ORIGINS ??= 'http://localhost:5173,http://localhost:5174,http://localhost:5175,http://localhost:5176'
 // Send later talks to the mock login server, which gives out tokens to anyone
 process.env.MAIL_OFFLINE_CLIENT_ID ??= 'tebonsma-mail'
 process.env.MAIL_OFFLINE_CLIENT_SECRET ??= 'mock'
@@ -53,4 +53,7 @@ if (!process.env.VAPID_PUBLIC_KEY) {
 await import('../src/server.ts')
 
 // npm run dev:mock:demo: example events with TebBet markets
-if (process.argv.includes('--demo')) await import('./demo.ts')
+if (process.argv.includes('--demo')) {
+  await import('./demo.ts')
+  await import('./demo-press.ts')
+}
