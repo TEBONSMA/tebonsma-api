@@ -25,12 +25,13 @@ import {
   setMenu,
   setPublished,
   updateArticle,
+  type ArticleAuthor,
   type ArticleInput,
   type Publication,
 } from './press.ts'
 
-// The Tebonsma Times and Tebonsma Tidsskrift (see press.ts). Reading is open, with members-only
-// articles locked for visitors; /desk is the editors' side.
+// The Tebonsma Times and Tebonsma Tidsskrift (see press.ts). Reading is open, but members-only
+// articles are only for those logged in; /desk is the editors' side.
 export const pressRoutes = new Hono<Env>()
 
 // A picture comes as base64 JSON, up to 2 MB
@@ -62,12 +63,13 @@ const editor = async (c: Context<Env>) => {
 
 const MAX_AHEAD = 366 * 24 * 60 * 60 * 1000
 
-// When to publish: an ISO time, up to a year ahead, or null for now. A minute late is still now.
+// When to publish: an ISO time up to a year ahead, or back to 2000 for articles from before the
+// site, or null for now
 function readAt(raw: unknown) {
   if (raw === undefined || raw === null) return null
   const time = typeof raw === 'string' ? Date.parse(raw) : NaN
   if (Number.isNaN(time)) throw bad('Ugyldig tidspunkt')
-  if (time < Date.now() - 60_000) throw bad('Tidspunktet har vært')
+  if (time < Date.parse('2000-01-01T00:00:00Z')) throw bad('Ugyldig tidspunkt')
   if (time > Date.now() + MAX_AHEAD) throw bad('Kan ikke planlegge mer enn et år fram')
   return new Date(time).toISOString()
 }
@@ -82,6 +84,14 @@ function readArticle(body: Record<string, unknown>): ArticleInput {
     return raw as string[]
   }
   const tags = [...new Set(list(body.tags, 'stikkord', 10).map(tag => readLine(tag, 'Stikkordet', 30)).filter(Boolean))]
+  // Each a public member id, or { id, alias } with the name to give them in this article
+  if (body.authors !== undefined && (!Array.isArray(body.authors) || body.authors.length > 10)) throw bad('Ugyldig liste med forfattere')
+  const authors = ((body.authors ?? []) as unknown[]).map((item): ArticleAuthor => {
+    if (typeof item === 'string') return { id: item }
+    const author = item as { id?: unknown; alias?: unknown } | null
+    if (!author || typeof author.id !== 'string') throw bad('Ugyldig forfatter')
+    return { id: author.id, alias: readLine(author.alias ?? '', 'Navnet', 80) || null }
+  })
   const visibility = body.visibility ?? 'members'
   if (visibility !== 'public' && visibility !== 'members') throw bad('Ugyldig synlighet')
   if (body.coverImage !== undefined && body.coverImage !== null && typeof body.coverImage !== 'string') throw bad('Ugyldig bilde')
@@ -91,7 +101,7 @@ function readArticle(body: Record<string, unknown>): ArticleInput {
     lead: readText(body.lead ?? '', 'Ingressen', 600),
     body: body.body,
     tags,
-    authors: list(body.authors, 'forfattere', 10),
+    authors,
     visibility,
     coverImage: (body.coverImage as string | null | undefined) ?? null,
     coverCaption: readLine(body.coverCaption ?? '', 'Bildeteksten', 300),
@@ -102,7 +112,7 @@ function readArticle(body: Record<string, unknown>): ArticleInput {
 
 pressRoutes.get('/press/:publication/front', async c => c.json(await getFront(publicationOf(c), await findCaller(c))))
 // The sections in use, with how many articles each
-pressRoutes.get('/press/:publication/sections', c => c.json(listSections(publicationOf(c))))
+pressRoutes.get('/press/:publication/sections', async c => c.json(listSections(publicationOf(c), await findCaller(c))))
 // The sections in the menu, in order
 pressRoutes.get('/press/:publication/menu', c => c.json(getMenu(publicationOf(c))))
 // ?section=, ?tag=, ?q= and ?before=<next> for the page after
