@@ -1064,9 +1064,7 @@ describe('The Tebonsma Times and Tebonsma Tidsskrift', () => {
   })
 
   it('lets the editors set the menu and rename a section', async () => {
-    const auto = (await call('GET', '/press/times/menu', null)).data
-    assert.equal(auto.custom, false)
-    assert.ok(auto.sections.includes('Innenriks'), 'the sections in use until the editors choose')
+    assert.deepEqual((await call('GET', '/press/times/menu', null)).data, { sections: [], custom: false }, 'empty until the editors choose')
     assert.equal((await call('PUT', '/press/times/menu', 'dev', { sections: ['Sport'] })).status, 403)
     const set = await call('PUT', '/press/times/menu', 'petter', { sections: ['Innenriks', 'Sport', 'Innenriks', ' '] })
     assert.equal(set.status, 200, JSON.stringify(set.data))

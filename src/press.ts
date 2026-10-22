@@ -247,13 +247,11 @@ export function listSections(publication: Publication, caller: Caller | null) {
     .all(publication, now()) as { section: string; count: number }[]
 }
 
-const MENU_AUTO = 8
-
-// The menu: the editors' list, or until they have made one, the sections in use, most used first
+// The menu: the editors' list, empty until they have made one
 export function getMenu(publication: Publication) {
   const row = db.prepare('SELECT sections FROM press_menus WHERE publication = ?').get(publication) as { sections: string } | undefined
   if (row) return { sections: JSON.parse(row.sections) as string[], custom: true }
-  return { sections: listSections(publication, null).slice(0, MENU_AUTO).map(row => row.section), custom: false }
+  return { sections: [], custom: false }
 }
 
 export function setMenu(publication: Publication, sections: string[]) {
