@@ -60,6 +60,18 @@ const editor = async (c: Context<Env>) => {
   return { caller, publication }
 }
 
+const MAX_AHEAD = 366 * 24 * 60 * 60 * 1000
+
+// When to publish: an ISO time, up to a year ahead, or null for now. A minute late is still now.
+function readAt(raw: unknown) {
+  if (raw === undefined || raw === null) return null
+  const time = typeof raw === 'string' ? Date.parse(raw) : NaN
+  if (Number.isNaN(time)) throw bad('Ugyldig tidspunkt')
+  if (time < Date.now() - 60_000) throw bad('Tidspunktet har vært')
+  if (time > Date.now() + MAX_AHEAD) throw bad('Kan ikke planlegge mer enn et år fram')
+  return new Date(time).toISOString()
+}
+
 function readArticle(body: Record<string, unknown>): ArticleInput {
   const title = readLine(body.title ?? '', 'Tittelen', 200)
   if (!title) throw bad('Saken trenger en tittel')
@@ -133,9 +145,11 @@ pressRoutes.put('/press/:publication/desk/:id', async c => {
   const { caller, publication } = await editor(c)
   return c.json(await updateArticle(publication, c.req.param('id') ?? '', caller, readArticle(await readBody(c))))
 })
+// { at } to publish later; without it, now
 pressRoutes.post('/press/:publication/desk/:id/publish', async c => {
   const { caller, publication } = await editor(c)
-  return c.json(await setPublished(publication, c.req.param('id') ?? '', caller, true))
+  const body = (await c.req.json().catch(() => ({}))) as { at?: unknown } | null
+  return c.json(await setPublished(publication, c.req.param('id') ?? '', caller, true, readAt(body?.at)))
 })
 pressRoutes.post('/press/:publication/desk/:id/unpublish', async c => {
   const { caller, publication } = await editor(c)
