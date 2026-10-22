@@ -944,3 +944,81 @@ describe('the bot with Claude', () => {
     assert.equal((await call('GET', '/bet/bot/claude', 'admin')).data.spentUsd.toFixed(2), '0.33')
   })
 })
+
+describe('The Tebonsma Times and Tebonsma Tidsskrift', () => {
+  const article = (title: string, extra: object = {}) => ({ title, section: 'Innenriks', lead: 'Ingress', body: '<p>Brødtekst</p>', visibility: 'members', ...extra })
+
+  it('lets only the editorial group write', async () => {
+    assert.equal((await call('POST', '/press/times/desk', null, article('Hei'))).status, 401)
+    assert.equal((await call('POST', '/press/times/desk', 'dev', article('Hei'))).status, 403, 'a member outside the group')
+    assert.equal((await call('POST', '/press/times/desk', 'eirik', article('Hei'))).status, 403, 'the other paper’s editor')
+    assert.equal((await call('POST', '/press/avisa/desk', 'petter', article('Hei'))).status, 404)
+    assert.deepEqual((await call('GET', '/press/times/me', 'petter')).data, { loggedIn: true, editor: true })
+    assert.deepEqual((await call('GET', '/press/times/me', 'dev')).data, { loggedIn: true, editor: false })
+    assert.deepEqual((await call('GET', '/press/tidsskrift/me', 'eirik')).data, { loggedIn: true, editor: true })
+  })
+
+  it('keeps drafts to the editors and cleans what is written', async () => {
+    const made = await call('POST', '/press/times/desk', 'petter', article('Blir det snøbad på pulebordet?', {
+      body: '<p>Hei<script>alert(1)</script></p><img src="https://example.com/x.png"><p><a href="javascript:alert(1)">farlig</a> <a href="https://tebonsma.no">trygg</a></p>',
+    }))
+    assert.equal(made.status, 201, JSON.stringify(made.data))
+    assert.equal(made.data.slug, 'blir-det-snobad-pa-pulebordet')
+    assert.equal(made.data.status, 'draft')
+    assert.ok(!made.data.body.includes('script') && !made.data.body.includes('example.com') && !made.data.body.includes('javascript'), made.data.body)
+    assert.ok(made.data.body.includes('<a href="https://tebonsma.no" target="_blank" rel="noopener noreferrer">trygg</a>'), made.data.body)
+    assert.equal((await call('GET', `/press/times/articles/${made.data.slug}`, 'kari')).status, 404, 'a draft is not out')
+    assert.equal((await call('GET', `/press/times/articles/${made.data.slug}`, 'petter')).status, 200)
+  })
+
+  it('publishes, locks members-only articles for visitors and keeps the address', async () => {
+    const made = (await call('POST', '/press/times/desk', 'petter', article('Eivind kom for sent'))).data
+    const published = await call('POST', `/press/times/desk/${made.id}/publish`, 'petter')
+    assert.equal(published.data.status, 'published')
+    const visitor = (await call('GET', `/press/times/articles/${made.slug}`, null)).data
+    assert.equal(visitor.locked, true)
+    assert.equal(visitor.body, null)
+    assert.equal(visitor.lead, 'Ingress', 'the lead shows, to make visitors curious')
+    const member = (await call('GET', `/press/times/articles/${made.slug}`, 'kari')).data
+    assert.equal(member.locked, false)
+    assert.equal(member.body, '<p>Brødtekst</p>')
+    const renamed = await call('PUT', `/press/times/desk/${made.id}`, 'petter', article('Eivind kom for sent igjen'))
+    assert.equal(renamed.data.slug, made.slug, 'a published article keeps its address')
+    assert.ok((await call('GET', '/press/times/articles', null)).data.articles.some((a: any) => a.id === made.id))
+    assert.ok((await call('GET', '/press/times/articles?q=igjen', 'kari')).data.articles.some((a: any) => a.id === made.id))
+    assert.ok((await call('GET', '/press/tidsskrift/articles', null)).data.articles.every((a: any) => a.id !== made.id), 'each paper has its own')
+  })
+
+  it('arranges the front page, with only published articles', async () => {
+    const one = (await call('POST', '/press/times/desk', 'petter', article('Toppsak', { visibility: 'public' }))).data
+    const two = (await call('POST', '/press/times/desk', 'petter', article('Nummer to', { visibility: 'public' }))).data
+    assert.equal((await call('PUT', '/press/times/front', 'petter', { ids: [one.id] })).status, 400, 'a draft can’t go on it')
+    await call('POST', `/press/times/desk/${one.id}/publish`, 'petter')
+    await call('POST', `/press/times/desk/${two.id}/publish`, 'petter')
+    const front = await call('PUT', '/press/times/front', 'petter', { ids: [two.id, one.id] })
+    assert.equal(front.status, 200, JSON.stringify(front.data))
+    assert.deepEqual(front.data.front.map((a: any) => a.title), ['Nummer to', 'Toppsak'])
+    assert.ok(front.data.latest.every((a: any) => a.id !== one.id && a.id !== two.id), 'not twice')
+    await call('POST', `/press/times/desk/${two.id}/unpublish`, 'petter')
+    assert.deepEqual((await call('GET', '/press/times/front', null)).data.front.map((a: any) => a.title), ['Toppsak'])
+    assert.equal((await call('PUT', '/press/times/front', 'dev', { ids: [] })).status, 403)
+  })
+
+  it('takes pictures from the editors and serves them to anyone', async () => {
+    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 4]).toString('base64')
+    assert.equal((await call('POST', '/press/tidsskrift/images', 'petter', { image: jpeg })).status, 403)
+    const saved = await call('POST', '/press/tidsskrift/images', 'eirik', { image: jpeg })
+    assert.equal(saved.status, 201)
+    const res = await fetch(API + saved.data.url)
+    assert.equal(res.status, 200)
+    assert.equal(res.headers.get('content-type'), 'image/jpeg')
+    assert.equal((await call('POST', '/press/tidsskrift/images', 'eirik', { image: Buffer.from('<svg/>').toString('base64') })).status, 400)
+    const withPicture = await call('POST', '/press/tidsskrift/desk', 'eirik', article('Med bilde', {
+      coverImage: saved.data.url,
+      body: `<p>Tekst</p><figure><img src="http://localhost:18787${saved.data.url}" alt="x"></figure>`,
+    }))
+    assert.equal(withPicture.status, 201, JSON.stringify(withPicture.data))
+    assert.equal(withPicture.data.coverImage, saved.data.url)
+    assert.ok(withPicture.data.body.includes(`<img src="${saved.data.url}" alt="x" />`), withPicture.data.body)
+  })
+})
