@@ -56,6 +56,31 @@ const users = new Map<string, MockUser>([
       createdAt: '2025-01-01T12:00:00Z',
     },
   ],
+  // The editors of The Tebonsma Times and Tebonsma Tidsskrift
+  [
+    'petter',
+    {
+      email: 'petter@tebonsma.test',
+      displayName: 'Petter Redaktør',
+      firstName: 'Petter',
+      lastName: 'Redaktør',
+      avatar: null,
+      groups: ['medlemmer', 'times_redaksjon'],
+      createdAt: '2025-01-01T12:00:00Z',
+    },
+  ],
+  [
+    'eirik',
+    {
+      email: 'eirik@tebonsma.test',
+      displayName: 'Eirik Doktor',
+      firstName: 'Eirik',
+      lastName: 'Doktor',
+      avatar: null,
+      groups: ['medlemmer', 'tidsskrift_redaksjon'],
+      createdAt: '2025-01-01T12:00:00Z',
+    },
+  ],
   [
     'admin',
     {
