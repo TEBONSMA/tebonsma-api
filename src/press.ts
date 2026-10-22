@@ -10,7 +10,8 @@ import { getMembers, usernameOf } from './members.ts'
 // Tidsskrift (tidsskrift.tebonsma.no), a journal. They work the same; only their sites look
 // different. Only the members of a paper's editorial group can write, publish and arrange it:
 // times_redaksjon and tidsskrift_redaksjon in LLDAP. Each article is open to everyone or to
-// members only, and can be published at once or at a set time.
+// members only; a visitor doesn't see members-only articles at all. They can be published at once
+// or at a set time.
 
 export const PUBLICATIONS = ['times', 'tidsskrift'] as const
 export type Publication = (typeof PUBLICATIONS)[number]
@@ -156,12 +157,10 @@ function uniqueSlug(publication: Publication, title: string, except: string | nu
 
 // --- What the sites get
 
-async function toArticles(rows: ArticleRow[], caller: Caller | null, withBody: boolean) {
+async function toArticles(rows: ArticleRow[], withBody: boolean) {
   const members = await getMembers(rows.flatMap(row => JSON.parse(row.authors) as string[]))
   const time = now()
   return rows.map(row => {
-    // A visitor sees that a members-only article is there, but not what it says
-    const locked = row.visibility === 'members' && !caller
     return {
       id: row.id,
       publication: row.publication,
@@ -171,8 +170,7 @@ async function toArticles(rows: ArticleRow[], caller: Caller | null, withBody: b
       section: row.section,
       title: row.title,
       lead: row.lead,
-      body: withBody && !locked ? row.body : null,
-      locked,
+      body: withBody ? row.body : null,
       tags: JSON.parse(row.tags) as string[],
       authors: (JSON.parse(row.authors) as string[]).map(username => members.get(username)!).filter(Boolean),
       coverImage: row.cover_image ? `/press/images/${row.cover_image}` : null,
@@ -191,17 +189,19 @@ export type Article = Awaited<ReturnType<typeof toArticles>>[number]
 const SELECT = 'SELECT * FROM press_articles'
 // What readers see: published, and not set for later. Takes the time now.
 const LIVE = "status = 'published' AND published_at <= ?"
+// Members-only articles are for those logged in
+const OPEN_TO = (caller: Caller | null) => (caller ? '' : " AND visibility = 'public'")
 
 // The front page: the articles the editors placed, in their order, then the latest of the rest
 export async function getFront(publication: Publication, caller: Caller | null) {
   // One set for later may be placed already, and comes on when it is out
   const placed = db
-    .prepare(`${SELECT} WHERE publication = ? AND ${LIVE} AND front_position IS NOT NULL ORDER BY front_position`)
+    .prepare(`${SELECT} WHERE publication = ? AND ${LIVE}${OPEN_TO(caller)} AND front_position IS NOT NULL ORDER BY front_position`)
     .all(publication, now()) as unknown as ArticleRow[]
   const latest = db
-    .prepare(`${SELECT} WHERE publication = ? AND ${LIVE} AND front_position IS NULL ORDER BY published_at DESC LIMIT ?`)
+    .prepare(`${SELECT} WHERE publication = ? AND ${LIVE}${OPEN_TO(caller)} AND front_position IS NULL ORDER BY published_at DESC LIMIT ?`)
     .all(publication, now(), LATEST) as unknown as ArticleRow[]
-  return { front: await toArticles(placed, caller, false), latest: await toArticles(latest, caller, false) }
+  return { front: await toArticles(placed, false), latest: await toArticles(latest, false) }
 }
 
 export interface ArticleQuery {
@@ -214,7 +214,7 @@ export interface ArticleQuery {
 
 // Published articles, the newest first, a page at a time
 export async function listArticles(publication: Publication, caller: Caller | null, query: ArticleQuery) {
-  const where = ['publication = ?', LIVE]
+  const where = ['publication = ?', LIVE + OPEN_TO(caller)]
   const params: string[] = [publication, now()]
   if (query.section) {
     where.push('section = ?')
@@ -225,9 +225,8 @@ export async function listArticles(publication: Publication, caller: Caller | nu
     params.push(query.tag)
   }
   if (query.q) {
-    // Members-only text isn't searched for visitors
     const like = `%${query.q.replace(/[\\%_]/g, c => `\\${c}`)}%`
-    where.push(caller ? "(title LIKE ? ESCAPE '\\' OR lead LIKE ? ESCAPE '\\' OR body LIKE ? ESCAPE '\\')" : "(title LIKE ? ESCAPE '\\' OR lead LIKE ? ESCAPE '\\' OR (visibility = 'public' AND body LIKE ? ESCAPE '\\'))")
+    where.push("(title LIKE ? ESCAPE '\\' OR lead LIKE ? ESCAPE '\\' OR body LIKE ? ESCAPE '\\')")
     params.push(like, like, like)
   }
   if (query.before) {
@@ -238,13 +237,13 @@ export async function listArticles(publication: Publication, caller: Caller | nu
     .prepare(`${SELECT} WHERE ${where.join(' AND ')} ORDER BY published_at DESC LIMIT ?`)
     .all(...params, PAGE + 1) as unknown as ArticleRow[]
   const page = rows.slice(0, PAGE)
-  return { articles: await toArticles(page, caller, false), next: rows.length > PAGE ? page[page.length - 1].published_at : null }
+  return { articles: await toArticles(page, false), next: rows.length > PAGE ? page[page.length - 1].published_at : null }
 }
 
-// The sections in use, with how many articles each, for the site's menu
-export function listSections(publication: Publication) {
+// The sections in use, with how many articles each, for the editors' menu page
+export function listSections(publication: Publication, caller: Caller | null) {
   return db
-    .prepare(`SELECT section, COUNT(*) AS count FROM press_articles WHERE publication = ? AND ${LIVE} AND section != '' GROUP BY section ORDER BY count DESC`)
+    .prepare(`SELECT section, COUNT(*) AS count FROM press_articles WHERE publication = ? AND ${LIVE}${OPEN_TO(caller)} AND section != '' GROUP BY section ORDER BY count DESC`)
     .all(publication, now()) as { section: string; count: number }[]
 }
 
@@ -254,7 +253,7 @@ const MENU_AUTO = 8
 export function getMenu(publication: Publication) {
   const row = db.prepare('SELECT sections FROM press_menus WHERE publication = ?').get(publication) as { sections: string } | undefined
   if (row) return { sections: JSON.parse(row.sections) as string[], custom: true }
-  return { sections: listSections(publication).slice(0, MENU_AUTO).map(row => row.section), custom: false }
+  return { sections: listSections(publication, null).slice(0, MENU_AUTO).map(row => row.section), custom: false }
 }
 
 export function setMenu(publication: Publication, sections: string[]) {
@@ -281,11 +280,13 @@ export function renameSection(publication: Publication, from: string, to: string
 
 const isLive = (row: ArticleRow) => row.status === 'published' && !!row.published_at && row.published_at <= now()
 
-// One article by its address. Drafts and articles set for later only for the editors.
+// One article by its address. Drafts and articles set for later only for the editors, members-only
+// articles only for those logged in.
 export async function getArticle(publication: Publication, slug: string, caller: Caller | null) {
   const row = db.prepare(`${SELECT} WHERE publication = ? AND slug = ?`).get(publication, slug) as ArticleRow | undefined
-  if (!row || (!isLive(row) && !isEditor(caller, publication))) throw new HTTPException(404, { message: 'Saken finnes ikke' })
-  return (await toArticles([row], caller, true))[0]
+  const hidden = !row || (!isLive(row) && !isEditor(caller, publication)) || (row.visibility === 'members' && !caller)
+  if (!row || hidden) throw new HTTPException(404, { message: 'Saken finnes ikke' })
+  return (await toArticles([row], true))[0]
 }
 
 // --- For the editors
@@ -301,11 +302,11 @@ export async function listForEditors(publication: Publication, caller: Caller) {
   const rows = db
     .prepare(`${SELECT} WHERE publication = ? ORDER BY status = 'published', COALESCE(published_at, updated_at) DESC`)
     .all(publication) as unknown as ArticleRow[]
-  return toArticles(rows, caller, false)
+  return toArticles(rows, false)
 }
 
 export async function getForEditing(publication: Publication, id: string, caller: Caller) {
-  return (await toArticles([findRow(publication, id)], caller, true))[0]
+  return (await toArticles([findRow(publication, id)], true))[0]
 }
 
 export interface ArticleInput {

@@ -29,8 +29,8 @@ import {
   type Publication,
 } from './press.ts'
 
-// The Tebonsma Times and Tebonsma Tidsskrift (see press.ts). Reading is open, with members-only
-// articles locked for visitors; /desk is the editors' side.
+// The Tebonsma Times and Tebonsma Tidsskrift (see press.ts). Reading is open, but members-only
+// articles are only for those logged in; /desk is the editors' side.
 export const pressRoutes = new Hono<Env>()
 
 // A picture comes as base64 JSON, up to 2 MB
@@ -103,7 +103,7 @@ function readArticle(body: Record<string, unknown>): ArticleInput {
 
 pressRoutes.get('/press/:publication/front', async c => c.json(await getFront(publicationOf(c), await findCaller(c))))
 // The sections in use, with how many articles each
-pressRoutes.get('/press/:publication/sections', c => c.json(listSections(publicationOf(c))))
+pressRoutes.get('/press/:publication/sections', async c => c.json(listSections(publicationOf(c), await findCaller(c))))
 // The sections in the menu, in order
 pressRoutes.get('/press/:publication/menu', c => c.json(getMenu(publicationOf(c))))
 // ?section=, ?tag=, ?q= and ?before=<next> for the page after

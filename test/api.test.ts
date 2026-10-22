@@ -971,21 +971,24 @@ describe('The Tebonsma Times and Tebonsma Tidsskrift', () => {
     assert.equal((await call('GET', `/press/times/articles/${made.data.slug}`, 'petter')).status, 200)
   })
 
-  it('publishes, locks members-only articles for visitors and keeps the address', async () => {
-    const made = (await call('POST', '/press/times/desk', 'petter', article('Eivind kom for sent'))).data
+  it('publishes, keeps members-only articles from visitors and keeps the address', async () => {
+    const made = (await call('POST', '/press/times/desk', 'petter', article('Eivind kom for sent', { section: 'Pulebord' }))).data
     const published = await call('POST', `/press/times/desk/${made.id}/publish`, 'petter')
     assert.equal(published.data.status, 'published')
-    const visitor = (await call('GET', `/press/times/articles/${made.slug}`, null)).data
-    assert.equal(visitor.locked, true)
-    assert.equal(visitor.body, null)
-    assert.equal(visitor.lead, 'Ingress', 'the lead shows, to make visitors curious')
+    assert.equal((await call('GET', `/press/times/articles/${made.slug}`, null)).status, 404, 'not there at all for visitors')
     const member = (await call('GET', `/press/times/articles/${made.slug}`, 'kari')).data
-    assert.equal(member.locked, false)
     assert.equal(member.body, '<p>Brødtekst</p>')
-    const renamed = await call('PUT', `/press/times/desk/${made.id}`, 'petter', article('Eivind kom for sent igjen'))
+    const renamed = await call('PUT', `/press/times/desk/${made.id}`, 'petter', article('Eivind kom for sent igjen', { section: 'Pulebord' }))
     assert.equal(renamed.data.slug, made.slug, 'a published article keeps its address')
-    assert.ok((await call('GET', '/press/times/articles', null)).data.articles.some((a: any) => a.id === made.id))
-    assert.ok((await call('GET', '/press/times/articles?q=igjen', 'kari')).data.articles.some((a: any) => a.id === made.id))
+    const listed = async (path: string, who: string | null) => (await call('GET', path, who)).data.articles.some((a: any) => a.id === made.id)
+    assert.equal(await listed('/press/times/articles', null), false)
+    assert.equal(await listed('/press/times/articles?q=igjen', null), false)
+    assert.equal(await listed('/press/times/articles', 'kari'), true)
+    assert.equal(await listed('/press/times/articles?q=igjen', 'kari'), true)
+    const front = (await call('GET', '/press/times/front', null)).data
+    assert.ok([...front.front, ...front.latest].every((a: any) => a.id !== made.id), 'nor on the front page')
+    assert.ok((await call('GET', '/press/times/sections', null)).data.every((s: any) => s.section !== 'Pulebord'))
+    assert.ok((await call('GET', '/press/times/sections', 'kari')).data.some((s: any) => s.section === 'Pulebord'))
     assert.ok((await call('GET', '/press/tidsskrift/articles', null)).data.articles.every((a: any) => a.id !== made.id), 'each paper has its own')
   })
 
