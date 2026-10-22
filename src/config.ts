@@ -77,6 +77,11 @@ export const config = {
     offline: offlineConfig(userinfoUrl, allowedOrigins[0] ?? 'https://tebonsma.no'),
   },
   push: pushConfig(),
+  // The editorial groups of The Tebonsma Times and Tebonsma Tidsskrift: only their members can write
+  press: {
+    timesGroup: process.env.TIMES_GROUP ?? 'times_redaksjon',
+    tidsskriftGroup: process.env.TIDSSKRIFT_GROUP ?? 'tidsskrift_redaksjon',
+  },
   claude: claudeConfig(),
   lldap: {
     url: (process.env.LLDAP_URL ?? 'http://lldap:17170').replace(/\/$/, ''),
