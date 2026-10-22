@@ -385,14 +385,15 @@ export async function updateArticle(publication: Publication, id: string, caller
   return getForEditing(publication, id, caller)
 }
 
-// Out now, or at a later time (at) for one that isn't out yet. An article taken down and put back
-// keeps the time it first came out.
+// Out now, or at another time (at) for one that isn't out yet: later to schedule it, earlier for
+// an article from before the site. An article taken down and put back keeps the time it first
+// came out.
 export async function setPublished(publication: Publication, id: string, caller: Caller, published: boolean, at: string | null = null) {
   const row = findRow(publication, id)
   const time = now()
   if (published && !row.title.trim()) throw bad('Saken trenger en tittel')
   if (published && at && isLive(row)) throw bad('Saken er allerede ute')
-  const publishedAt = at && at > time ? at : row.published_at && row.published_at <= time ? row.published_at : time
+  const publishedAt = at ?? (row.published_at && row.published_at <= time ? row.published_at : time)
   db.prepare('UPDATE press_articles SET status = ?, published_at = ?, front_position = ?, updated_at = ? WHERE id = ?').run(
     published ? 'published' : 'draft',
     published ? publishedAt : row.published_at,

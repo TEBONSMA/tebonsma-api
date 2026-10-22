@@ -992,7 +992,6 @@ describe('The Tebonsma Times and Tebonsma Tidsskrift', () => {
   it('publishes at a set time, out of sight until then', async () => {
     const made = (await call('POST', '/press/times/desk', 'petter', article('Sommerfesten er avlyst', { visibility: 'public', section: 'Fest' }))).data
     const path = `/press/times/desk/${made.id}/publish`
-    assert.equal((await call('POST', path, 'petter', { at: new Date(Date.now() - 5 * 60_000).toISOString() })).status, 400, 'not in the past')
     assert.equal((await call('POST', path, 'petter', { at: 'snart' })).status, 400)
     const at = new Date(Date.now() + 1500).toISOString()
     const scheduled = await call('POST', path, 'petter', { at })
@@ -1019,6 +1018,18 @@ describe('The Tebonsma Times and Tebonsma Tidsskrift', () => {
     assert.equal(out.data.scheduled, false)
     assert.equal((await call('GET', '/press/times/front', null)).data.front[0].id, made.id, 'on the front page when it is out')
     assert.equal((await call('POST', path, 'petter', { at: new Date(Date.now() + 60_000).toISOString() })).status, 400, 'what is out stays out')
+  })
+
+  it('publishes with an earlier date, for articles from before the site', async () => {
+    const made = (await call('POST', '/press/times/desk', 'petter', article('Dassen er nuka', { visibility: 'public' }))).data
+    const path = `/press/times/desk/${made.id}/publish`
+    assert.equal((await call('POST', path, 'petter', { at: '1999-12-31T23:00:00.000Z' })).status, 400)
+    const at = '2024-12-21T23:40:00.000Z'
+    const published = await call('POST', path, 'petter', { at })
+    assert.equal(published.status, 200, JSON.stringify(published.data))
+    assert.equal(published.data.scheduled, false)
+    assert.equal(published.data.publishedAt, at)
+    assert.equal((await call('GET', `/press/times/articles/${made.slug}`, null)).status, 200, 'out at once')
   })
 
   it('publishes at once what was set for later', async () => {

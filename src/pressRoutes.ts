@@ -62,12 +62,13 @@ const editor = async (c: Context<Env>) => {
 
 const MAX_AHEAD = 366 * 24 * 60 * 60 * 1000
 
-// When to publish: an ISO time, up to a year ahead, or null for now. A minute late is still now.
+// When to publish: an ISO time up to a year ahead, or back to 2000 for articles from before the
+// site, or null for now
 function readAt(raw: unknown) {
   if (raw === undefined || raw === null) return null
   const time = typeof raw === 'string' ? Date.parse(raw) : NaN
   if (Number.isNaN(time)) throw bad('Ugyldig tidspunkt')
-  if (time < Date.now() - 60_000) throw bad('Tidspunktet har vært')
+  if (time < Date.parse('2000-01-01T00:00:00Z')) throw bad('Ugyldig tidspunkt')
   if (time > Date.now() + MAX_AHEAD) throw bad('Kan ikke planlegge mer enn et år fram')
   return new Date(time).toISOString()
 }
