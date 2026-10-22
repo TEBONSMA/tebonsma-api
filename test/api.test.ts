@@ -1045,6 +1045,18 @@ describe('The Tebonsma Times and Tebonsma Tidsskrift', () => {
     assert.equal((await call('POST', '/press/times/desk', 'petter', article('Uten forfatter', { authors: [{ alias: 'Ingen' }] }))).status, 400)
   })
 
+  it('takes authors without an account by name', async () => {
+    const members = (await call('GET', '/press/tidsskrift/desk/members', 'eirik')).data
+    const eirik = members.find((m: any) => m.name === 'Eirik Doktor')
+    const made = await call('POST', '/press/tidsskrift/desk', 'eirik', article('Tverrfaglig samarbeid', { authors: [{ id: eirik.id }, { name: 'Trond Viggo Torgersen' }] }))
+    assert.equal(made.status, 201, JSON.stringify(made.data))
+    assert.deepEqual(made.data.authors, [
+      { ...eirik, alias: null },
+      { id: null, name: 'Trond Viggo Torgersen', avatar: null, alias: null },
+    ])
+    assert.equal((await call('POST', '/press/tidsskrift/desk', 'eirik', article('Uten navn', { authors: [{ name: ' ' }] }))).status, 400)
+  })
+
   it('publishes at once what was set for later', async () => {
     const made = (await call('POST', '/press/times/desk', 'petter', article('Planlagt, men ikke lenger'))).data
     await call('POST', `/press/times/desk/${made.id}/publish`, 'petter', { at: new Date(Date.now() + 3_600_000).toISOString() })
