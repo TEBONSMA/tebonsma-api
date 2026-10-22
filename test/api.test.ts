@@ -1004,6 +1004,21 @@ describe('The Tebonsma Times and Tebonsma Tidsskrift', () => {
     assert.equal((await call('PUT', '/press/times/front', 'dev', { ids: [] })).status, 403)
   })
 
+  it('lets the editors set the menu and rename a section', async () => {
+    const auto = (await call('GET', '/press/times/menu', null)).data
+    assert.equal(auto.custom, false)
+    assert.ok(auto.sections.includes('Innenriks'), 'the sections in use until the editors choose')
+    assert.equal((await call('PUT', '/press/times/menu', 'dev', { sections: ['Sport'] })).status, 403)
+    const set = await call('PUT', '/press/times/menu', 'petter', { sections: ['Innenriks', 'Sport', 'Innenriks', ' '] })
+    assert.equal(set.status, 200, JSON.stringify(set.data))
+    assert.deepEqual(set.data, { sections: ['Innenriks', 'Sport'], custom: true })
+    const renamed = await call('POST', '/press/times/sections/rename', 'petter', { from: 'Innenriks', to: 'Inn- og utenriks' })
+    assert.deepEqual(renamed.data.sections, ['Inn- og utenriks', 'Sport'])
+    const listed = (await call('GET', '/press/times/articles?section=Inn-%20og%20utenriks', 'kari')).data.articles
+    assert.ok(listed.length > 0, 'the articles moved along')
+    assert.equal((await call('GET', '/press/times/articles?section=Innenriks', 'kari')).data.articles.length, 0)
+  })
+
   it('takes pictures from the editors and serves them to anyone', async () => {
     const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 4]).toString('base64')
     assert.equal((await call('POST', '/press/tidsskrift/images', 'petter', { image: jpeg })).status, 403)

@@ -11,15 +11,18 @@ import {
   getArticle,
   getForEditing,
   getFront,
+  getMenu,
   isEditor,
   isPublication,
   listArticles,
   listForEditors,
   listSections,
   readImage,
+  renameSection,
   requireEditor,
   saveImage,
   setFront,
+  setMenu,
   setPublished,
   updateArticle,
   type ArticleInput,
@@ -88,6 +91,8 @@ function readArticle(body: Record<string, unknown>): ArticleInput {
 pressRoutes.get('/press/:publication/front', async c => c.json(await getFront(publicationOf(c), await findCaller(c))))
 // The sections in use, with how many articles each
 pressRoutes.get('/press/:publication/sections', c => c.json(listSections(publicationOf(c))))
+// The sections in the menu, in order
+pressRoutes.get('/press/:publication/menu', c => c.json(getMenu(publicationOf(c))))
 // ?section=, ?tag=, ?q= and ?before=<next> for the page after
 pressRoutes.get('/press/:publication/articles', async c => {
   const { section, tag, q, before } = c.req.query()
@@ -147,6 +152,20 @@ pressRoutes.put('/press/:publication/front', requireCaller, async c => {
   const { ids } = await readBody(c)
   if (!Array.isArray(ids) || ids.length > 50 || ids.some(id => typeof id !== 'string')) throw bad('Ugyldig rekkefølge')
   return c.json(await setFront(publication, ids as string[], caller))
+})
+// { sections }: the menu from the left
+pressRoutes.put('/press/:publication/menu', requireCaller, async c => {
+  const { publication } = await editor(c)
+  const { sections } = await readBody(c)
+  if (!Array.isArray(sections) || sections.length > 12 || sections.some(s => typeof s !== 'string')) throw bad('Ugyldig meny')
+  const names = [...new Set((sections as string[]).map(section => readLine(section, 'Seksjonen', 40)).filter(Boolean))]
+  return c.json(setMenu(publication, names))
+})
+// { from, to }: a section gets a new name, on every article in it
+pressRoutes.post('/press/:publication/sections/rename', requireCaller, async c => {
+  const { publication } = await editor(c)
+  const { from, to } = await readBody(c)
+  return c.json(renameSection(publication, readLine(from ?? '', 'Seksjonen', 40), readLine(to ?? '', 'Seksjonen', 40)))
 })
 // { image: base64 JPEG }
 pressRoutes.post('/press/:publication/images', requireCaller, async c => {

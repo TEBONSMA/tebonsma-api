@@ -54,6 +54,13 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS press_articles_published ON press_articles (publication, status, published_at);
 
+  -- The sections in the paper's menu, in order, as the editors set them
+  CREATE TABLE IF NOT EXISTS press_menus (
+    publication TEXT PRIMARY KEY,
+    sections    TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+  );
+
   CREATE TABLE IF NOT EXISTS press_images (
     id          TEXT PRIMARY KEY,
     publication TEXT NOT NULL,
@@ -223,6 +230,37 @@ export function listSections(publication: Publication) {
   return db
     .prepare("SELECT section, COUNT(*) AS count FROM press_articles WHERE publication = ? AND status = 'published' AND section != '' GROUP BY section ORDER BY count DESC")
     .all(publication) as { section: string; count: number }[]
+}
+
+const MENU_AUTO = 8
+
+// The menu: the editors' list, or until they have made one, the sections in use, most used first
+export function getMenu(publication: Publication) {
+  const row = db.prepare('SELECT sections FROM press_menus WHERE publication = ?').get(publication) as { sections: string } | undefined
+  if (row) return { sections: JSON.parse(row.sections) as string[], custom: true }
+  return { sections: listSections(publication).slice(0, MENU_AUTO).map(row => row.section), custom: false }
+}
+
+export function setMenu(publication: Publication, sections: string[]) {
+  db.prepare(
+    `INSERT INTO press_menus (publication, sections, updated_at) VALUES (?, ?, ?)
+     ON CONFLICT (publication) DO UPDATE SET sections = excluded.sections, updated_at = excluded.updated_at`,
+  ).run(publication, JSON.stringify(sections), now())
+  return getMenu(publication)
+}
+
+// A new name for a section: on every article in it, and in the menu
+export function renameSection(publication: Publication, from: string, to: string) {
+  if (!from || !to) throw bad('Seksjonen trenger et navn')
+  transaction(() => {
+    db.prepare('UPDATE press_articles SET section = ? WHERE publication = ? AND section = ?').run(to, publication, from)
+    const menu = db.prepare('SELECT sections FROM press_menus WHERE publication = ?').get(publication) as { sections: string } | undefined
+    if (menu) {
+      const sections = [...new Set((JSON.parse(menu.sections) as string[]).map(section => (section === from ? to : section)))]
+      db.prepare('UPDATE press_menus SET sections = ?, updated_at = ? WHERE publication = ?').run(JSON.stringify(sections), now(), publication)
+    }
+  })
+  return getMenu(publication)
 }
 
 // One article by its address. Drafts only for the editors.
