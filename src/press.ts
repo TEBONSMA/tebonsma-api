@@ -104,16 +104,24 @@ interface ArticleRow {
 // editor used for them.
 const OWN_IMAGE = /^(?:https?:\/\/[^/]+)?\/press\/images\/([0-9a-f-]{36})$/
 
+const FIGURE_SIZES = new Set(['small', 'medium', 'full'])
+
 export function cleanBody(html: string) {
   return sanitizeHtml(html, {
     allowedTags: ['h2', 'h3', 'p', 'br', 'strong', 'b', 'em', 'i', 'u', 's', 'a', 'blockquote', 'ul', 'ol', 'li', 'hr', 'figure', 'img', 'figcaption', 'code'],
-    allowedAttributes: { a: ['href', 'target', 'rel'], img: ['src', 'alt'] },
+    // A picture in the text has a size (small beside the text, medium, full width) and a caption
+    allowedAttributes: { a: ['href', 'target', 'rel'], img: ['src', 'alt'], figure: ['data-size'] },
     allowedSchemes: ['http', 'https', 'mailto'],
     allowedSchemesByTag: { img: ['http', 'https'] },
     allowProtocolRelative: false,
     // Links open in a new tab, whatever the input said
     transformTags: {
       a: (tagName, attribs) => ({ tagName, attribs: { href: attribs.href ?? '', target: '_blank', rel: 'noopener noreferrer' } }),
+      figure: (tagName, attribs) => {
+        const size = attribs['data-size'] ?? ''
+        const kept: Record<string, string> = FIGURE_SIZES.has(size) ? { 'data-size': size } : {}
+        return { tagName, attribs: kept }
+      },
     },
     exclusiveFilter: frame => frame.tag === 'img' && !OWN_IMAGE.test(frame.attribs.src ?? ''),
   }).replace(/src="(?:https?:\/\/[^/"]+)?\/press\/images\//g, 'src="/press/images/')

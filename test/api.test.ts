@@ -1030,10 +1030,12 @@ describe('The Tebonsma Times and Tebonsma Tidsskrift', () => {
     assert.equal((await call('POST', '/press/tidsskrift/images', 'eirik', { image: Buffer.from('<svg/>').toString('base64') })).status, 400)
     const withPicture = await call('POST', '/press/tidsskrift/desk', 'eirik', article('Med bilde', {
       coverImage: saved.data.url,
-      body: `<p>Tekst</p><figure><img src="http://localhost:18787${saved.data.url}" alt="x"></figure>`,
+      body: `<p>Tekst</p><figure data-size="small" onclick="x"><img src="http://localhost:18787${saved.data.url}" alt="x"><figcaption>Petter på <em>pulebordet</em></figcaption></figure><figure data-size="huge"><img src="${saved.data.url}"></figure>`,
     }))
     assert.equal(withPicture.status, 201, JSON.stringify(withPicture.data))
     assert.equal(withPicture.data.coverImage, saved.data.url)
-    assert.ok(withPicture.data.body.includes(`<img src="${saved.data.url}" alt="x" />`), withPicture.data.body)
+    const body = withPicture.data.body as string
+    assert.ok(body.includes(`<figure data-size="small"><img src="${saved.data.url}" alt="x" /><figcaption>Petter på <em>pulebordet</em></figcaption></figure>`), body)
+    assert.ok(body.includes(`<figure><img src="${saved.data.url}" /></figure>`), body) // an unknown size is dropped
   })
 })
