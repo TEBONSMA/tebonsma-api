@@ -1045,6 +1045,14 @@ describe('The Tebonsma Times and Tebonsma Tidsskrift', () => {
     assert.equal((await call('POST', '/press/times/desk', 'petter', article('Uten forfatter', { authors: [{ alias: 'Ingen' }] }))).status, 400)
   })
 
+  it('keeps the issue the journal printed an article in', async () => {
+    const made = await call('POST', '/press/tidsskrift/desk', 'eirik', article('Fra utgave 1', { issue: '1/2025' }))
+    assert.equal(made.status, 201, JSON.stringify(made.data))
+    assert.equal(made.data.issue, '1/2025')
+    assert.equal((await call('PUT', `/press/tidsskrift/desk/${made.data.id}`, 'eirik', article('Fra utgave 1'))).data.issue, '', 'empty when left out')
+    assert.equal((await call('POST', '/press/tidsskrift/desk', 'eirik', article('For lang', { issue: 'x'.repeat(21) }))).status, 400)
+  })
+
   it('takes authors without an account by name', async () => {
     const members = (await call('GET', '/press/tidsskrift/desk/members', 'eirik')).data
     const eirik = members.find((m: any) => m.name === 'Eirik Doktor')

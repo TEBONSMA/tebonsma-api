@@ -111,6 +111,7 @@ function readArticle(body: Record<string, unknown>): ArticleInput {
     visibility,
     coverImage: (body.coverImage as string | null | undefined) ?? null,
     coverCaption: readLine(body.coverCaption ?? '', 'Bildeteksten', 300),
+    issue: readLine(body.issue ?? '', 'Utgaven', 20),
   }
 }
 

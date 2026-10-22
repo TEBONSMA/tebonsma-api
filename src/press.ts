@@ -46,6 +46,8 @@ db.exec(`
     authors        TEXT NOT NULL DEFAULT '[]',
     cover_image    TEXT,
     cover_caption  TEXT NOT NULL DEFAULT '',
+    -- The journal's own numbering, as printed ("1/2025"); empty for the month it came out
+    issue          TEXT NOT NULL DEFAULT '',
     -- Its place on the front page, 0 at the top; null when it isn't there
     front_position INTEGER,
     created_by     TEXT NOT NULL,
@@ -74,6 +76,11 @@ db.exec(`
   );
 `)
 
+// The issue came after the first articles
+if (!(db.prepare('PRAGMA table_info(press_articles)').all() as { name: string }[]).some(column => column.name === 'issue')) {
+  db.exec("ALTER TABLE press_articles ADD COLUMN issue TEXT NOT NULL DEFAULT ''")
+}
+
 const bad = (message: string) => new HTTPException(400, { message })
 const now = () => new Date().toISOString()
 const LATEST = 20
@@ -94,6 +101,7 @@ interface ArticleRow {
   authors: string
   cover_image: string | null
   cover_caption: string
+  issue: string
   front_position: number | null
   created_by: string
   created_at: string
@@ -200,6 +208,7 @@ async function toArticles(rows: ArticleRow[], withBody: boolean) {
       }),
       coverImage: row.cover_image ? `/press/images/${row.cover_image}` : null,
       coverCaption: row.cover_caption,
+      issue: row.issue,
       frontPosition: row.front_position,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
@@ -347,6 +356,8 @@ export interface ArticleInput {
   visibility: 'public' | 'members'
   coverImage: string | null
   coverCaption: string
+  // The journal's numbering, as printed ("1/2025"), or empty
+  issue: string
 }
 
 const authorsOf = (authors: ArticleAuthor[]): StoredAuthor[] =>
@@ -368,8 +379,8 @@ export async function createArticle(publication: Publication, caller: Caller, in
   const id = randomUUID()
   const time = now()
   db.prepare(
-    `INSERT INTO press_articles (id, publication, slug, visibility, section, title, lead, body, tags, authors, cover_image, cover_caption, created_by, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO press_articles (id, publication, slug, visibility, section, title, lead, body, tags, authors, cover_image, cover_caption, issue, created_by, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     publication,
@@ -383,6 +394,7 @@ export async function createArticle(publication: Publication, caller: Caller, in
     JSON.stringify(authorsOf(input.authors)),
     imageIdOf(input.coverImage),
     input.coverCaption,
+    input.issue,
     caller.username,
     time,
     time,
@@ -396,7 +408,7 @@ export async function updateArticle(publication: Publication, id: string, caller
   const slug = isLive(row) ? row.slug : uniqueSlug(publication, input.title, id)
   db.prepare(
     `UPDATE press_articles SET slug = ?, visibility = ?, section = ?, title = ?, lead = ?, body = ?, tags = ?, authors = ?,
-       cover_image = ?, cover_caption = ?, updated_at = ? WHERE id = ?`,
+       cover_image = ?, cover_caption = ?, issue = ?, updated_at = ? WHERE id = ?`,
   ).run(
     slug,
     input.visibility,
@@ -408,6 +420,7 @@ export async function updateArticle(publication: Publication, id: string, caller
     JSON.stringify(authorsOf(input.authors)),
     imageIdOf(input.coverImage),
     input.coverCaption,
+    input.issue,
     now(),
     id,
   )
