@@ -81,9 +81,11 @@ export const config = {
     tidsskriftGroup: process.env.TIDSSKRIFT_GROUP ?? 'tidsskrift_redaksjon',
   },
   claude: claudeConfig(),
-  // The vedtekter repo publishes its builds with this key; without it publishing is off
   vedtekter: {
+    // The vedtekter repo publishes its builds with this key; without it publishing is off
     publishKey: process.env.VEDTEKTER_PUBLISH_KEY || null,
+    // Members of this group run the proposals and the årsmøte, like the admins
+    protocolGroup: process.env.PROTOCOL_GROUP ?? 'protokollforer',
   },
   lldap: {
     url: (process.env.LLDAP_URL ?? 'http://lldap:17170').replace(/\/$/, ''),

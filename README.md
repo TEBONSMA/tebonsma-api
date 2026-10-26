@@ -434,8 +434,58 @@ a JSON version of them on every change and publishes both here. Only members can
 | Method | Path | What |
 |---|---|---|
 | GET | `/vedtekter` | The vedtekter in force: the document as built (`tittel`, `vedtatt`, `versjon`, `dato`, `paragrafer` with number, title, text as HTML and as written, `fotnoter`, `kilder`), with `commit` and `publisert` |
-| GET | `/vedtekter/pdf` | The same as PDF |
+| GET | `/vedtekter/pdf` | The same as PDF, for members or with a link from `/vedtekter/pdf/lenke`. `last-ned=1` downloads it instead of showing it |
+| GET | `/vedtekter/pdf/lenke` | A link to the PDF that works without the login for an hour, so the browser opens it like any other PDF: `{ url, utloper }` |
 | PUT | `/vedtekter` | Publish a build, from the vedtekter repo's workflow with `Authorization: Bearer <VEDTEKTER_PUBLISH_KEY>`: multipart `commit`, `dokument` (the JSON) and `pdf`. Every version is kept; a rerun of the same commit replaces the newest |
+
+Members propose changes to the vedtekter on the website. A proposal holds one or more changes,
+each to change (`endre`), add (`legge-til`, placed after a paragraph or first under one) or
+delete (`slette`) a paragraph, with the text as written in the vedtekter repo. A change
+remembers the paragraph as it read when it was written, so a later change to it shows. A
+motforslag (`parent`) is another version of a proposal, voted against it; if that one is
+withdrawn, it stands on its own (`withdrawnParent`). A proposal starts as a draft (`utkast`)
+or is sent in (`innsendt`); its author can edit it until the deadline for the next årsmøte
+(a week before, § 3) and withdraw it (`trukket`). The protocol group (`PROTOCOL_GROUP`) and the
+admins set the next årsmøte, edit proposals after the deadline and record what the årsmøte
+decided (`vedtatt`, `forkastet`). Two drafts are made the first time: the additions the
+årsmøte on 20 December 2025 decided without a text.
+
+| Method | Path | What |
+|---|---|---|
+| GET | `/vedtekter/forslag` | Every proposal in short, with `canManage` and the next `arsmote` (`startsAt`, `forslagFrist`, `sakslisteFrist`) |
+| POST | `/vedtekter/forslag` | Make one: `{ title, reason, changes: [{ type: 'endre', target, title, text } \| { type: 'legge-til', parent, after, title, text } \| { type: 'slette', target }], parent?, submit? }` |
+| GET, PATCH | `/vedtekter/forslag/:number` | One proposal with its changes, motforslag, comments and what the caller `can` do; change it (same body) |
+| POST | `/vedtekter/forslag/:number/send-inn`, `/trekk` | Send a draft in, or withdraw a proposal |
+| POST | `/vedtekter/forslag/:number/status` | What the årsmøte decided (protocol group): `{ status: 'vedtatt' \| 'forkastet' \| 'innsendt' }` |
+| POST | `/vedtekter/forslag/:number/kommentarer` | Comment on it: `{ body }` |
+| PUT | `/vedtekter/arsmote` | Set or move the next årsmøte (protocol group): `{ title, startsAt }`. It stays planned until started, also when the time has passed; once started its time stays, as the deadlines follow from it |
+
+At the årsmøte members check in and vote on their phones, and the protocol group adds what was
+counted by hand in the room. The agenda (`saker`) holds the proposals, those to the same
+paragraphs as one case, and other cases the protocol group adds (`punkt`), in the order it puts
+them. In a case, a proposal sent in after the deadline is first taken up or not by 3/4 of those
+present (`opptak`, § 3; one not taken up goes on to the next årsmøte), a motforslag is voted
+against its proposal and competing proposals against each other (`kontra`, the most votes), and
+the one left against the vedtekter as they are (`endelig`, 2/3 of the votes cast, § 3.3). A tie
+for the most votes leaves the vote `likt` until the protocol group has it voted on again
+(`gjenvalg`, maybe without the options with the fewest votes) or puts in the lot drawn (§ 3). Anything else is put to a vote with its own question and options (`fri`). One vote is
+open at a time; a member can change their vote until it closes, and only the protocol group sees
+the count before that. Afterwards the vedtekter repo fetches what was adopted and writes it in.
+
+| Method | Path | What |
+|---|---|---|
+| GET | `/vedtekter/arsmote/live` | The årsmøte going on or planned, or else the last: `arsmote` (with `state`), `canManage`, `present`, `attendees`, `voteringer` (with `options`, `mine`, `counts` for each option and blank, `result`, `byLot`, `present`, and the changes in full while open) and `saker` in order (with `next`, `current`, `done`, and `opptak` for each proposal) |
+| POST | `/vedtekter/arsmote/start`, `/avslutt` | Start or end it (protocol group) |
+| POST | `/vedtekter/arsmote/oppmote` | Check in, while it goes on |
+| POST, DELETE | `/vedtekter/arsmote/oppmote/:memberId` | Check someone in or out (protocol group) |
+| POST, DELETE | `/vedtekter/arsmote/saker`, `/saker/:id` | Add another case to the agenda, `{ title }`, or take it off (protocol group) |
+| PUT | `/vedtekter/arsmote/saksliste` | The order of the cases (protocol group): `{ order: ['punkt:<id>', 'forslag:3', …] }`; any proposal in a case places it |
+| POST | `/vedtekter/voteringer` | Open a vote (protocol group): `{ a, b }` for forslag a against b, or against the vedtekter when `b` is null; `{ a, opptak: true }`; or `{ title, options, rule: 'flertall' \| 'to-tredjedeler', sak? }` |
+| POST | `/vedtekter/voteringer/:id/stem` | Vote, checked in: `{ choice }`, the option's index or `'blank'` |
+| POST | `/vedtekter/voteringer/:id/lukk` | Close it with the hand count (protocol group): `{ hand: { options: [n, …], blank } }` |
+| POST | `/vedtekter/voteringer/:id/loddtrekning` | After a tie (protocol group): `{ option }`, the lot drawn in the room, or `'tilfeldig'` to draw here |
+| POST | `/vedtekter/voteringer/:id/gjenvalg` | After a tie (protocol group): `{ keep: [i, …] }`, the options to vote on again |
+| GET | `/vedtekter/arsmote/vedtatt` | What the årsmøte going on or the last one adopted, for the vedtekter repo (with `VEDTEKTER_PUBLISH_KEY`) or the protocol group: `{ arsmote, vedtatt, forslag: [{ number, title, changes }] }` in the order adopted |
 
 ## Requirements
 
@@ -465,6 +515,7 @@ a JSON version of them on every change and publishes both here. Only members can
 | `CLAUDE_MODEL` | `claude-opus-5-5` | The model the bot asks |
 | `CLAUDE_MONTHLY_USD` | `20` | What the bot may spend with Claude in a calendar month, by its own count |
 | `CLAUDE_MIN_OPEN_SECONDS` | `3600` | How long a market Claude makes must stay open at least. Shorter lets you try it out |
+| `PROTOCOL_GROUP` | `protokollforer` | Group whose members run the proposals to change the vedtekter and the årsmøte, like the admins. Read from LLDAP every 15 seconds, so a change there counts during the årsmøte without logging in again |
 | `VEDTEKTER_PUBLISH_KEY` | none (`mock` in `npm run dev:mock`) | The key the vedtekter repo publishes its builds with, a long random string kept as a secret there too. Without it publishing is off |
 | `MAIL_IMAP_HOST`, `MAIL_IMAP_PORT` | `mail.tebonsma.no`, `993` | Where mail is read (TLS from the start) |
 | `MAIL_SMTP_HOST`, `MAIL_SMTP_PORT` | `mail.tebonsma.no`, `465` | Where mail is sent |

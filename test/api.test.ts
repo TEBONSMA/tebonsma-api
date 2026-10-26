@@ -1082,7 +1082,8 @@ describe('The Tebonsma Times and Tebonsma Tidsskrift', () => {
     await call('POST', `/press/times/desk/${made.id}/publish`, 'petter', { at: new Date(Date.now() + 3_600_000).toISOString() })
     const now = await call('POST', `/press/times/desk/${made.id}/publish`, 'petter')
     assert.equal(now.data.scheduled, false)
-    assert.ok(Date.parse(now.data.publishedAt) <= Date.now())
+    // Now, not in an hour; the server's clock may run a few milliseconds ahead of the test's
+    assert.ok(Date.parse(now.data.publishedAt) < Date.now() + 60_000, now.data.publishedAt)
     const later = (await call('POST', '/press/times/desk', 'petter', article('Avbrutt planlegging'))).data
     await call('POST', `/press/times/desk/${later.id}/publish`, 'petter', { at: new Date(Date.now() + 3_600_000).toISOString() })
     const back = await call('POST', `/press/times/desk/${later.id}/unpublish`, 'petter')
@@ -1214,8 +1215,346 @@ describe('the vedtekter', () => {
     assert.equal(res.headers.get('content-type'), 'application/pdf')
     assert.equal(Buffer.from(await res.arrayBuffer()).subarray(0, 5).toString(), '%PDF-')
 
+    // A link for the browser to open without the login, for an hour
+    assert.equal((await call('GET', '/vedtekter/pdf/lenke', null)).status, 401)
+    const { url } = (await call('GET', '/vedtekter/pdf/lenke', 'kari')).data
+    const opened = await fetch(API + url)
+    assert.equal(opened.status, 200)
+    assert.match(opened.headers.get('content-disposition') ?? '', /^inline/)
+    assert.match((await fetch(`${API + url}&last-ned=1`)).headers.get('content-disposition') ?? '', /^attachment/)
+    assert.equal((await fetch(`${API + url}x`)).status, 401, 'a signature changed by a letter')
+
     // A rerun of the same build replaces it
     await publish('mock', { ...good, dokument: JSON.stringify({ ...document, versjon: '0.1.8' }) })
     assert.equal((await call('GET', '/vedtekter', 'kari')).data.versjon, '0.1.8')
+  })
+
+  it('takes proposals to change them, amendments and comments, and lets the protocol group decide', async () => {
+    const paragraph = (id: string, nummer: string, tittel: string, kilde: string, barn: object[] = []) => ({
+      id,
+      nummer,
+      tittel,
+      tittelHtml: tittel,
+      kilde,
+      html: `<p>${kilde}</p>`,
+      barn,
+    })
+    const tree = [
+      paragraph('foreningen', '1', 'Foreningen', 'Om foreningen.', [paragraph('navn', '1.1', 'Navn', 'Navnet er TEBONSMA.')]),
+      paragraph('styret', '2', 'Styret', 'Sju medlemmer.', [
+        paragraph('styretitler', '2.1', 'Styretitler', '', [paragraph('prop-hunter', '2.1.1', 'Prop-hunter / Styremedlem', 'Skaffer rekvisitter.')]),
+      ]),
+      paragraph('bedrukkenhet', '3', 'Bedrukkenhet', 'Alkohol.'),
+    ]
+    assert.equal((await publish('mock', { commit: 'c'.repeat(40), dokument: JSON.stringify({ ...document, paragrafer: tree }), pdf })).status, 201)
+
+    assert.equal((await call('GET', '/vedtekter/forslag', null)).status, 401)
+    const start = (await call('GET', '/vedtekter/forslag', 'kari')).data
+    assert.equal(start.canManage, false)
+    assert.equal(start.arsmote, null)
+    assert.deepEqual(
+      start.forslag.map((f: any) => [f.number, f.title, f.status]),
+      [
+        [1, 'Kriseteam på alle fester', 'utkast'],
+        [2, 'Mangfold- og inkluderingsansvarlig', 'utkast'],
+      ],
+      'the two additions from the årsmøte in 2025, still without a text',
+    )
+    assert.deepEqual(start.forslag[1].changes, [
+      { type: 'legge-til', title: 'Mangfold- og inkluderingsansvarlig / Styremedlem', parent: '§ 2.1', after: '§ 2.1.1' },
+    ])
+
+    const propose = (user: string, body: object) => call('POST', '/vedtekter/forslag', user, { reason: '', ...body })
+    const rename = { type: 'endre', target: 'navn', title: 'Navn', text: 'Navnet er TEBONSMA, og det skal du ikke glemme.' }
+    assert.equal((await propose('kari', { title: 'Ingenting', changes: [{ ...rename, text: 'Navnet er TEBONSMA.' }], submit: true })).status, 400)
+    assert.equal((await propose('kari', { title: 'Feil sted', changes: [{ type: 'endre', target: 'finnes-ikke', title: 'X', text: '' }] })).status, 400)
+    const made = await propose('kari', { title: 'Husk navnet', reason: 'Folk glemmer.', changes: [rename], submit: true })
+    assert.equal(made.status, 201, JSON.stringify(made.data))
+    assert.equal(made.data.number, 3)
+    assert.equal(made.data.status, 'innsendt')
+    assert.equal(made.data.changes[0].original.kilde, 'Navnet er TEBONSMA.')
+    assert.equal(made.data.author.name, 'Kari Nordmann')
+
+    // A new paragraph goes after one of those under the parent it is placed in
+    const add = (after: string | null) => ({ type: 'legge-til', parent: 'styret', after, title: 'Kasserer', text: '' })
+    assert.equal((await propose('kari', { title: 'Ny', changes: [add('navn')] })).status, 400)
+    const draft = await propose('kari', { title: 'Kasserer i styret', changes: [add('styretitler')] })
+    assert.equal(draft.status, 201, JSON.stringify(draft.data))
+    assert.equal(draft.data.status, 'utkast')
+    assert.equal((await call('POST', '/vedtekter/forslag/4/send-inn', 'ola')).status, 403, 'not her draft')
+    assert.equal((await call('POST', '/vedtekter/forslag/4/send-inn', 'kari')).data.status, 'innsendt')
+    const removeAndChange = [{ type: 'slette', target: 'styret' }, { type: 'endre', target: 'prop-hunter', title: 'X', text: 'Y' }]
+    assert.equal((await propose('kari', { title: 'Rot', changes: removeAndChange, submit: true })).status, 400)
+
+    assert.equal((await call('PATCH', '/vedtekter/forslag/3', 'ola', { title: 'Mitt nå', changes: [rename] })).status, 403)
+    const amendment = await propose('ola', { title: 'Husk navnet, men kortere', parent: 3, changes: [{ ...rename, text: 'Navnet er TEBONSMA. Husk det.' }], submit: true })
+    assert.equal(amendment.status, 201, JSON.stringify(amendment.data))
+    assert.equal(amendment.data.parent, 3)
+    assert.equal((await propose('ola', { title: 'Enda kortere', parent: 5, changes: [rename] })).status, 400, 'no motforslag to a motforslag')
+    const commented = await call('POST', '/vedtekter/forslag/3/kommentarer', 'ola', { body: 'Godt forslag' })
+    assert.equal(commented.status, 201)
+    assert.deepEqual(commented.data.comments.map((c: any) => [c.author.name, c.body]), [['Ola Nordmann', 'Godt forslag']])
+    assert.deepEqual(commented.data.amendments.map((a: any) => a.number), [5])
+
+    // A motforslag to forslag 4 stands on its own once that is withdrawn
+    const counter = await propose('dev', { title: 'Kasserer, men i styret', parent: 4, changes: [add('styretitler')], submit: true })
+    assert.equal(counter.data.parent, 4)
+    assert.equal((await call('POST', '/vedtekter/forslag/4/trekk', 'kari')).data.status, 'trukket')
+    const alone = (await call('GET', `/vedtekter/forslag/${counter.data.number}`, 'kari')).data
+    assert.equal(alone.parent, null)
+    assert.equal(alone.withdrawnParent, 4)
+    assert.equal(alone.can.amend, true, 'it can get motforslag of its own')
+    assert.equal(alone.status, 'innsendt')
+    await call('POST', `/vedtekter/forslag/${counter.data.number}/trekk`, 'dev')
+    assert.equal((await call('POST', '/vedtekter/forslag/3/status', 'kari', { status: 'vedtatt' })).status, 403)
+    const decided = await call('POST', '/vedtekter/forslag/3/status', 'eirik', { status: 'vedtatt' })
+    assert.equal(decided.data.status, 'vedtatt')
+    assert.equal(decided.data.can.edit, false)
+
+    // The protocol group sets the årsmøte; the deadlines follow § 3
+    assert.equal((await call('PUT', '/vedtekter/arsmote', 'kari', { title: 'Årsmøte', startsAt: '2030-12-20T12:00:00.000Z' })).status, 403)
+    const meeting = await call('PUT', '/vedtekter/arsmote', 'eirik', { title: 'Ordinært årsmøte 2030', startsAt: '2030-12-20T12:00:00.000Z' })
+    assert.equal(meeting.status, 200, JSON.stringify(meeting.data))
+    assert.equal(meeting.data.forslagFrist, '2030-12-13T12:00:00.000Z')
+    assert.equal(meeting.data.sakslisteFrist, '2030-12-18T12:00:00.000Z')
+    // Still the one planned when the time has passed, until it is started or moved
+    const passed = await call('PUT', '/vedtekter/arsmote', 'eirik', { title: 'Ordinært årsmøte 2030', startsAt: '2020-12-20T12:00:00.000Z' })
+    assert.equal(passed.data.id, meeting.data.id)
+    assert.equal((await call('GET', '/vedtekter/forslag', 'kari')).data.arsmote.id, meeting.data.id)
+    await call('PUT', '/vedtekter/arsmote', 'eirik', { title: 'Ordinært årsmøte 2030', startsAt: '2030-12-20T12:00:00.000Z' })
+    const listed = (await call('GET', '/vedtekter/forslag', 'eirik')).data
+    assert.equal(listed.canManage, true)
+    assert.equal(listed.arsmote.title, 'Ordinært årsmøte 2030')
+    const five = listed.forslag.find((f: any) => f.number === 5)
+    assert.equal(five.arsmote, listed.arsmote.id)
+    assert.equal(five.late, false)
+  })
+
+  it('lets the årsmøte vote on the proposals: one against the other, and the one left against the vedtekter', async () => {
+    assert.equal((await call('POST', '/vedtekter/forslag/5/trekk', 'eirik')).data.status, 'trukket')
+    const propose = async (user: string, title: string, changes: object[]) => {
+      const made = await call('POST', '/vedtekter/forslag', user, { title, reason: '', changes, submit: true })
+      assert.equal(made.status, 201, JSON.stringify(made.data))
+      return made.data.number as number
+    }
+    const p = await propose('kari', 'Navnet med utropstegn', [{ type: 'endre', target: 'navn', title: 'Navn', text: 'Navnet er TEBONSMA!' }])
+    const q = await propose('ola', 'Navnet med store bokstaver', [{ type: 'endre', target: 'navn', title: 'NAVN', text: 'NAVNET ER TEBONSMA.' }])
+    const r = await propose('dev', 'Fjern bedrukkenheten', [{ type: 'slette', target: 'bedrukkenhet' }])
+    const s = await propose('kari', 'Kasserer', [{ type: 'legge-til', parent: 'styretitler', after: 'prop-hunter', title: 'Kasserer / Styremedlem', text: 'Har pengene.' }])
+
+    assert.equal((await call('POST', '/vedtekter/arsmote/oppmote', 'kari')).status, 400, 'not started')
+    assert.equal((await call('POST', '/vedtekter/arsmote/start', 'kari')).status, 403)
+    const started = await call('POST', '/vedtekter/arsmote/start', 'eirik')
+    assert.equal(started.status, 200, JSON.stringify(started.data))
+    assert.equal(started.data.arsmote.state, 'pågår')
+    const moved = { title: 'Ordinært årsmøte 2030', startsAt: '2030-12-21T12:00:00.000Z' }
+    assert.equal((await call('PUT', '/vedtekter/arsmote', 'eirik', moved)).status, 400, 'the deadlines follow from the time')
+    // The two proposals to § 1.1 are one case; the others stand alone
+    assert.deepEqual(
+      started.data.saker.map((sak: any) => [sak.forslag.map((f: any) => f.number), sak.next]),
+      [
+        [[p, q], { a: p, b: q, opptak: false }],
+        [[r], { a: r, b: null, opptak: false }],
+        [[s], { a: s, b: null, opptak: false }],
+      ],
+    )
+
+    // The protocol group adds other cases and puts them in order; everyone sees the list
+    assert.equal((await call('POST', '/vedtekter/arsmote/saker', 'kari', { title: 'Valg av styreleder' })).status, 403)
+    const valg = (await call('POST', '/vedtekter/arsmote/saker', 'eirik', { title: 'Valg av styreleder' })).data.saker.at(-1)
+    assert.equal(valg.title, 'Valg av styreleder')
+    const reordered = await call('PUT', '/vedtekter/arsmote/saksliste', 'eirik', { order: [valg.key, `forslag:${r}`, `forslag:${q}`] })
+    assert.deepEqual(
+      reordered.data.saker.map((sak: any) => sak.title),
+      ['Valg av styreleder', 'Fjern bedrukkenheten', 'Navnet med utropstegn', 'Kasserer'],
+      'any proposal in a case places it',
+    )
+    assert.equal((await call('PUT', '/vedtekter/arsmote/saksliste', 'eirik', { order: ['DROP TABLE'] })).status, 400)
+    assert.equal((await call('PUT', '/vedtekter/arsmote/saksliste', 'kari', { order: [] })).status, 403)
+    assert.equal((await call('GET', '/vedtekter/arsmote/live', 'kari')).data.saker[0].title, 'Valg av styreleder')
+
+    for (const user of ['kari', 'ola', 'dev']) assert.equal((await call('POST', '/vedtekter/arsmote/oppmote', user)).data.present, true)
+    const petter = (await call('GET', '/members', 'eirik')).data.find((m: any) => /petter/i.test(m.name))
+    assert.equal((await call('POST', `/vedtekter/arsmote/oppmote/${petter.id}`, 'kari')).status, 403)
+    assert.equal((await call('POST', `/vedtekter/arsmote/oppmote/${petter.id}`, 'eirik')).data.attendees.length, 4)
+    assert.equal((await call('DELETE', `/vedtekter/arsmote/oppmote/${petter.id}`, 'eirik')).data.attendees.length, 3)
+
+    const open = async (a: number, b: number | null) => {
+      const opened = await call('POST', '/vedtekter/voteringer', 'eirik', { a, b })
+      assert.equal(opened.status, 201, JSON.stringify(opened.data))
+      return opened.data.voteringer.at(-1).id as string
+    }
+    const vote = (user: string, id: string, choice: number | 'blank') => call('POST', `/vedtekter/voteringer/${id}/stem`, user, { choice })
+    assert.equal((await call('POST', '/vedtekter/voteringer', 'eirik', { a: p, b: null })).status, 400, 'forslag q is still in the way')
+    assert.equal((await call('POST', '/vedtekter/voteringer', 'kari', { a: p, b: q })).status, 403)
+
+    // A tie, left to the protocol group, which draws lots
+    const kontra = await open(p, q)
+    assert.equal((await call('POST', '/vedtekter/voteringer', 'eirik', { a: r, b: null })).status, 400, 'one at a time')
+    assert.equal((await vote('kari', kontra, 0)).status, 200)
+    assert.equal((await vote('ola', kontra, 0)).status, 200)
+    assert.equal((await vote('ola', kontra, 1)).status, 200, 'a member can change their mind')
+    assert.equal((await vote('dev', kontra, 'blank')).status, 200)
+    assert.equal((await vote('dev', kontra, 2)).status, 400, 'there are two options')
+    assert.equal((await vote('petter', kontra, 0)).status, 403, 'not checked in')
+    const during = (await call('GET', '/vedtekter/arsmote/live', 'kari')).data.voteringer[0]
+    assert.equal(during.changes.a[0].text, 'Navnet er TEBONSMA!', 'the changes in full, to see what differs')
+    assert.equal(during.changes.b[0].original.kilde, 'Navnet er TEBONSMA.')
+    assert.deepEqual(during.options, [`Forslag ${p}`, `Forslag ${q}`])
+    assert.equal(during.mine, 0)
+    assert.equal(during.voted, 3)
+    assert.equal(during.counts, null, 'only the protocol group sees the count before it closes')
+    assert.equal((await call('POST', `/vedtekter/voteringer/${kontra}/lukk`, 'kari', { hand: {} })).status, 403)
+    const even = (await call('POST', `/vedtekter/voteringer/${kontra}/lukk`, 'eirik', { hand: { options: [2, 2] } })).data.voteringer[0]
+    assert.equal(even.status, 'likt')
+    assert.equal(even.result, null)
+    assert.deepEqual(even.tied, [0, 1])
+    assert.equal(even.changes, null)
+    assert.deepEqual([...even.counts.total, even.counts.blank.total], [3, 3, 1])
+    assert.equal((await call('GET', `/vedtekter/forslag/${p}`, 'kari')).data.status, 'innsendt', 'nothing decided yet')
+    assert.equal((await call('POST', '/vedtekter/voteringer', 'eirik', { a: r, b: null })).status, 400, 'the tie first')
+    assert.equal((await call('POST', '/vedtekter/arsmote/avslutt', 'eirik')).status, 400)
+    const lot = (body: object, user = 'eirik') => call('POST', `/vedtekter/voteringer/${kontra}/loddtrekning`, user, body)
+    assert.equal((await lot({ option: 'tilfeldig' }, 'kari')).status, 403)
+    assert.equal((await lot({ option: 2 })).status, 400)
+    const tied = (await lot({ option: 'tilfeldig' })).data
+    const closed = tied.voteringer[0]
+    assert.equal(closed.status, 'lukket')
+    assert.equal(closed.byLot, true)
+    assert.equal((await lot({ option: 0 })).status, 400, 'drawn once')
+    const [winner, loser] = closed.result === 0 ? [p, q] : [q, p]
+    assert.equal((await call('GET', `/vedtekter/forslag/${loser}`, 'kari')).data.status, 'forkastet')
+    assert.deepEqual(tied.saker.find((sak: any) => sak.key === `forslag:${p}`).next, { a: winner, b: null, opptak: false })
+
+    // 2 of 3 is enough to change the vedtekter (§ 3.3)
+    const first = await open(winner, null)
+    await vote('kari', first, 0)
+    await vote('ola', first, 0)
+    await vote('dev', first, 1)
+    const adoptedOne = (await call('POST', `/vedtekter/voteringer/${first}/lukk`, 'eirik', {})).data.voteringer[1]
+    assert.deepEqual(adoptedOne.options, ['For', 'Mot'])
+    assert.equal(adoptedOne.result, 0)
+    assert.equal((await call('GET', `/vedtekter/forslag/${winner}`, 'kari')).data.status, 'vedtatt')
+
+    // A majority, but not 2/3
+    const second = await open(r, null)
+    await vote('kari', second, 0)
+    await vote('ola', second, 1)
+    await vote('dev', second, 1)
+    await call('POST', `/vedtekter/voteringer/${second}/lukk`, 'eirik', { hand: { options: [2] } })
+    assert.equal((await call('GET', `/vedtekter/forslag/${r}`, 'kari')).data.status, 'forkastet')
+
+    const third = await open(s, null)
+    await vote('kari', third, 0)
+    await call('POST', `/vedtekter/voteringer/${third}/lukk`, 'eirik', { hand: { options: [5, 1], blank: 3 } })
+    assert.equal((await vote('ola', third, 0)).status, 400, 'closed')
+
+    // Anything else on the agenda, with its own options; it decides no proposal
+    const free = (body: object) => call('POST', '/vedtekter/voteringer', 'eirik', body)
+    assert.equal((await free({ title: 'Valg av styreleder', options: ['Kari'] })).status, 400, 'two options at least')
+    assert.equal((await free({ title: 'Valg av styreleder', options: ['Kari', 'kari'] })).status, 400)
+    assert.equal((await call('POST', '/vedtekter/voteringer', 'kari', { title: 'Kupp', options: ['Ja', 'Nei'] })).status, 403)
+    const election = (await free({ title: 'Valg av styreleder', options: ['Kari', 'Ola', 'Petter'], sak: valg.punkt })).data.voteringer.at(-1)
+    assert.equal(election.kind, 'fri')
+    assert.equal(election.title, 'Valg av styreleder')
+    assert.equal(election.a, null)
+    await vote('kari', election.id, 0)
+    await vote('ola', election.id, 1)
+    await vote('dev', election.id, 1)
+    // A three-way tie, voted on again without Petter
+    const threeWay = (await call('POST', `/vedtekter/voteringer/${election.id}/lukk`, 'eirik', { hand: { options: [1, 0, 2] } })).data
+    assert.deepEqual(threeWay.voteringer.at(-1).counts.total, [2, 2, 2])
+    assert.deepEqual(threeWay.voteringer.at(-1).tied, [0, 1, 2])
+    assert.equal(threeWay.saker[0].current, true, 'the case waits for the tie')
+    const again = (body: object) => call('POST', `/vedtekter/voteringer/${election.id}/gjenvalg`, 'eirik', body)
+    assert.equal((await again({ keep: [0] })).status, 400, 'two options at least')
+    const revoted = (await again({ keep: [0, 1] })).data
+    const runoff = revoted.voteringer.at(-1)
+    assert.deepEqual(runoff.options, ['Kari', 'Ola'])
+    assert.equal(runoff.gjenvalgAv, election.id)
+    assert.equal(runoff.status, 'åpen')
+    assert.equal(revoted.voteringer.at(-2).gjenvalg, true)
+    assert.equal(revoted.saker[0].done, false)
+    await vote('kari', runoff.id, 0)
+    await vote('ola', runoff.id, 1)
+    await vote('dev', runoff.id, 1)
+    const afterElection = (await call('POST', `/vedtekter/voteringer/${runoff.id}/lukk`, 'eirik', {})).data
+    assert.equal(afterElection.voteringer.at(-1).result, 1, 'Ola')
+    assert.equal(afterElection.saker[0].done, true, 'the case on the agenda is done')
+    assert.equal((await call('DELETE', `/vedtekter/arsmote/saker/${valg.punkt}`, 'eirik')).status, 400, 'it was voted on')
+    const budget = (await free({ title: 'Godkjenne budsjettet', options: ['Ja', 'Nei'], rule: 'to-tredjedeler' })).data.voteringer.at(-1)
+    await vote('kari', budget.id, 0)
+    await vote('ola', budget.id, 1)
+    const unsettled = (await call('POST', `/vedtekter/voteringer/${budget.id}/lukk`, 'eirik', { hand: { options: [2, 1] } })).data.voteringer.at(-1)
+    assert.equal(unsettled.result, null, '3 of 5 is less than 2/3, so nothing is decided')
+
+    // What was adopted goes to the vedtekter repo, which fetches it with its key
+    assert.equal((await call('GET', '/vedtekter/arsmote/vedtatt', 'kari')).status, 403)
+    assert.equal((await call('GET', '/vedtekter/arsmote/vedtatt', null)).status, 401)
+    const res = await fetch(`${API}/vedtekter/arsmote/vedtatt`, { headers: { Authorization: 'Bearer mock' } })
+    const exported = await res.json()
+    assert.equal(res.status, 200, JSON.stringify(exported))
+    assert.match(exported.vedtatt, /^Sist endret på ordinært årsmøte \d{1,2}\. [a-zø]+ \d{4}$/)
+    assert.deepEqual(exported.forslag.map((f: any) => f.number), [winner, s])
+    assert.equal(exported.forslag[1].changes[0].after, 'prop-hunter')
+    assert.deepEqual((await call('GET', '/vedtekter/arsmote/vedtatt', 'eirik')).data, exported)
+
+    assert.equal((await call('POST', '/vedtekter/arsmote/avslutt', 'kari')).status, 403)
+    const ended = (await call('POST', '/vedtekter/arsmote/avslutt', 'eirik')).data
+    assert.equal(ended.arsmote.state, 'avsluttet')
+    assert.equal(ended.voteringer.length, 7, 'the votes stay for everyone to see')
+    assert.deepEqual((await call('GET', '/vedtekter/arsmote/vedtatt', 'eirik')).data.forslag.map((f: any) => f.number), [winner, s])
+
+    // An årsmøte in three days: the deadline a week before has passed, so what comes in now is not
+    // on the agenda, and is only taken up if 3/4 of those present want it
+    const soon = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString()
+    assert.equal((await call('PUT', '/vedtekter/arsmote', 'eirik', { title: 'Ekstraordinært årsmøte', startsAt: soon })).status, 200)
+    const late1 = await propose('ola', 'For sent', [{ type: 'endre', target: 'foreningen', title: 'Foreningen', text: 'Om oss.' }])
+    const late2 = await propose('kari', 'Også for sent', [{ type: 'endre', target: 'styret', title: 'Styret', text: 'Ni medlemmer.' }])
+    await call('POST', '/vedtekter/arsmote/start', 'eirik')
+    for (const user of ['kari', 'ola', 'dev']) await call('POST', '/vedtekter/arsmote/oppmote', user)
+    const lateLive = (await call('GET', '/vedtekter/arsmote/live', 'eirik')).data
+    assert.deepEqual(
+      lateLive.saker.map((sak: any) => [sak.forslag[0].opptak, sak.next]),
+      [
+        ['kreves', { a: late1, b: null, opptak: true }],
+        ['kreves', { a: late2, b: null, opptak: true }],
+      ],
+    )
+    assert.equal((await call('POST', '/vedtekter/voteringer', 'eirik', { a: late1, b: null })).status, 400, 'not on the agenda yet')
+    const takeUp = async (number: number) => {
+      const opened = await call('POST', '/vedtekter/voteringer', 'eirik', { a: number, opptak: true })
+      assert.equal(opened.status, 201, JSON.stringify(opened.data))
+      return opened.data.voteringer.at(-1)
+    }
+    const withLate1 = (await call('POST', '/vedtekter/forslag', 'dev', { title: 'Om dem', reason: '', parent: late1, submit: true, changes: [{ type: 'endre', target: 'foreningen', title: 'Foreningen', text: 'Om dem.' }] })).data
+    const notEnough = await takeUp(late1)
+    assert.equal(notEnough.title, `Skal forslag ${late1} tas opp?`)
+    assert.deepEqual(notEnough.options, ['Ja', 'Nei'])
+    await vote('kari', notEnough.id, 0)
+    await vote('ola', notEnough.id, 0)
+    await vote('dev', notEnough.id, 1)
+    const left = (await call('POST', `/vedtekter/voteringer/${notEnough.id}/lukk`, 'eirik', {})).data
+    assert.equal(left.voteringer.at(-1).present, 3)
+    assert.equal(left.voteringer.at(-1).result, 1, '2 of 3 present is less than 3/4')
+    assert.equal(left.saker[0].forslag[0].opptak, 'ikke-tatt-opp')
+    assert.equal(left.saker[0].forslag[0].status, 'innsendt', 'it goes on to the next årsmøte')
+    assert.equal(left.saker[0].forslag[1].opptak, 'ikke-tatt-opp', 'its motforslag goes with it')
+    assert.equal(left.saker[0].done, true)
+    assert.equal((await call('POST', '/vedtekter/voteringer', 'eirik', { a: late1, b: null })).status, 400)
+    assert.equal((await call('POST', '/vedtekter/voteringer', 'eirik', { a: withLate1.number, b: null })).status, 400)
+
+    const enough = await takeUp(late2)
+    for (const user of ['kari', 'ola', 'dev']) await vote(user, enough.id, 0)
+    const taken = (await call('POST', `/vedtekter/voteringer/${enough.id}/lukk`, 'eirik', {})).data
+    assert.equal(taken.saker[1].forslag[0].opptak, 'tatt-opp')
+    assert.deepEqual(taken.saker[1].next, { a: late2, b: null, opptak: false })
+    // An amendment made in the meeting to a case on the agenda needs no 3/4
+    const onTheSpot = (await call('POST', '/vedtekter/forslag', 'dev', { title: 'Åtte', reason: '', parent: late2, submit: true, changes: [{ type: 'endre', target: 'styret', title: 'Styret', text: 'Åtte medlemmer.' }] })).data
+    const withAmendment = (await call('GET', '/vedtekter/arsmote/live', 'eirik')).data.saker[1]
+    assert.deepEqual(withAmendment.next, { a: late2, b: onTheSpot.number, opptak: false })
+    assert.equal(withAmendment.forslag[1].opptak, null)
+    const afterwards = (await call('POST', '/vedtekter/arsmote/avslutt', 'eirik')).data
+    assert.equal(afterwards.saker[0].forslag[0].opptak, 'ikke-tatt-opp', 'still on the list of the årsmøte that left it out')
   })
 })
