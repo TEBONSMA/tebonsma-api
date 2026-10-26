@@ -426,6 +426,17 @@ Only addresses at the push services above are accepted, never one inside the net
 the API posts to whatever address it is given. A subscription the push service says is gone
 (404 or 410) is deleted. Nothing is pushed without keys, or in a trial run of a new version.
 
+### Vedtekter
+
+The vedtekter (the association's rules) are written in their own repo, which builds a PDF and
+a JSON version of them on every change and publishes both here. Only members can read them.
+
+| Method | Path | What |
+|---|---|---|
+| GET | `/vedtekter` | The vedtekter in force: the document as built (`tittel`, `vedtatt`, `versjon`, `dato`, `paragrafer` with number, title, text as HTML and as written, `fotnoter`, `kilder`), with `commit` and `publisert` |
+| GET | `/vedtekter/pdf` | The same as PDF |
+| PUT | `/vedtekter` | Publish a build, from the vedtekter repo's workflow with `Authorization: Bearer <VEDTEKTER_PUBLISH_KEY>`: multipart `commit`, `dokument` (the JSON) and `pdf`. Every version is kept; a rerun of the same commit replaces the newest |
+
 ## Requirements
 
 - Node.js 22.18 or newer, which runs the TypeScript sources directly (no build step), or Docker.
@@ -454,6 +465,7 @@ the API posts to whatever address it is given. A subscription the push service s
 | `CLAUDE_MODEL` | `claude-opus-5-5` | The model the bot asks |
 | `CLAUDE_MONTHLY_USD` | `20` | What the bot may spend with Claude in a calendar month, by its own count |
 | `CLAUDE_MIN_OPEN_SECONDS` | `3600` | How long a market Claude makes must stay open at least. Shorter lets you try it out |
+| `VEDTEKTER_PUBLISH_KEY` | none (`mock` in `npm run dev:mock`) | The key the vedtekter repo publishes its builds with, a long random string kept as a secret there too. Without it publishing is off |
 | `MAIL_IMAP_HOST`, `MAIL_IMAP_PORT` | `mail.tebonsma.no`, `993` | Where mail is read (TLS from the start) |
 | `MAIL_SMTP_HOST`, `MAIL_SMTP_PORT` | `mail.tebonsma.no`, `465` | Where mail is sent |
 | `MAIL_SIEVE_HOST`, `MAIL_SIEVE_PORT` | `mail.tebonsma.no`, `4190` | ManageSieve, for the auto-reply |
