@@ -20,6 +20,8 @@ process.env.LLDAP_URL ??= mockUrl
 process.env.LLDAP_USERNAME ??= 'mock'
 process.env.LLDAP_PASSWORD ??= 'mock'
 process.env.SITE_URL ??= 'http://localhost:5173'
+// A local build of the vedtekter repo can be published with this key
+process.env.VEDTEKTER_PUBLISH_KEY ??= 'mock'
 // The bot asks Claude about the news; only with --bots
 if (!process.argv.includes('--bots')) process.env.BOTS ??= 'off'
 // The site, TebBet (bet.tebonsma.no), The Tebonsma Times and Tebonsma Tidsskrift on their own dev ports

@@ -1159,3 +1159,63 @@ describe('The Tebonsma Times and Tebonsma Tidsskrift', () => {
     assert.ok(!/<script|alert|onload|srcdoc|example\.com|tebonsma\.no|camera|frameborder/.test(body), body)
   })
 })
+
+describe('the vedtekter', () => {
+  const commit = 'a'.repeat(40)
+  const pdf = new Uint8Array(Buffer.from('%PDF-1.5\n%test\n'))
+  const document = {
+    tittel: 'Vedtekter for den autoritære stiftelse',
+    navn: 'TEBONSMA',
+    vedtatt: 'Vedtatt på ordinært årsmøte',
+    versjon: '0.1.7',
+    dato: '2026-10-26',
+    paragrafer: [
+      {
+        id: 'foreningen',
+        nummer: '1',
+        tittel: 'Foreningen',
+        tittelHtml: 'Foreningen',
+        html: '<p>Se <a href="#navn">§ 1.1</a><script>alert(1)</script><img src="x" onerror="alert(1)"></p>',
+        barn: [],
+      },
+    ],
+  }
+  // As the vedtekter repo's workflow sends a build
+  const publish = async (key: string, fields: { commit: string; dokument: string; pdf: Uint8Array<ArrayBuffer> }) => {
+    const form = new FormData()
+    form.append('commit', fields.commit)
+    form.append('dokument', new File([fields.dokument], 'vedtekter.json', { type: 'application/json' }))
+    form.append('pdf', new File([fields.pdf], 'vedtekter.pdf', { type: 'application/pdf' }))
+    const res = await fetch(`${API}/vedtekter`, { method: 'PUT', headers: { Authorization: `Bearer ${key}` }, body: form })
+    return { status: res.status, data: await res.json() }
+  }
+
+  it('takes builds from the vedtekter repo with its key, and shows them to members only', async () => {
+    assert.equal((await call('GET', '/vedtekter', 'kari')).status, 404, 'nothing published yet')
+    const good = { commit, dokument: JSON.stringify(document), pdf }
+    assert.equal((await publish('wrong', good)).status, 401)
+    assert.equal((await publish('mock', { ...good, pdf: new Uint8Array([1, 2, 3]) })).status, 400, 'not a PDF')
+    assert.equal((await publish('mock', { ...good, dokument: '{"tittel": "x"}' })).status, 400)
+    assert.equal((await publish('mock', { ...good, commit: 'main' })).status, 400)
+    const published = await publish('mock', good)
+    assert.equal(published.status, 201, JSON.stringify(published.data))
+
+    assert.equal((await call('GET', '/vedtekter', null)).status, 401)
+    const read = await call('GET', '/vedtekter', 'kari')
+    assert.equal(read.status, 200)
+    assert.equal(read.data.tittel, document.tittel)
+    assert.equal(read.data.commit, commit)
+    assert.equal(read.data.paragrafer[0].id, 'foreningen')
+    assert.equal(read.data.paragrafer[0].html, '<p>Se <a href="#navn">§ 1.1</a></p>', 'only the markup the build writes')
+
+    assert.equal((await call('GET', '/vedtekter/pdf', null)).status, 401)
+    const res = await fetch(`${API}/vedtekter/pdf`, { headers: { Authorization: 'Bearer mock-access.kari' } })
+    assert.equal(res.status, 200)
+    assert.equal(res.headers.get('content-type'), 'application/pdf')
+    assert.equal(Buffer.from(await res.arrayBuffer()).subarray(0, 5).toString(), '%PDF-')
+
+    // A rerun of the same build replaces it
+    await publish('mock', { ...good, dokument: JSON.stringify({ ...document, versjon: '0.1.8' }) })
+    assert.equal((await call('GET', '/vedtekter', 'kari')).data.versjon, '0.1.8')
+  })
+})

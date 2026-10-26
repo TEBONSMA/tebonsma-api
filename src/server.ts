@@ -20,6 +20,7 @@ import { startNewMarketsCheck } from './newMarkets.ts'
 import { settleLandedRounds } from './rounds.ts'
 import { pushRoutes } from './pushRoutes.ts'
 import { pressRoutes } from './pressRoutes.ts'
+import { vedtekterRoutes } from './vedtekterRoutes.ts'
 import { getProfile as readProfile, setAvatar, updateProfile, type ProfileChanges } from './lldap.ts'
 import { rememberProfile } from './members.ts'
 import { getLeaderboard, isGame, ScoreRejected, startRun, submitScore } from './scoreboard.ts'
@@ -148,6 +149,7 @@ app.route('/', betRoutes)
 app.route('/', memberRoutes)
 app.route('/', pushRoutes)
 app.route('/', pressRoutes)
+app.route('/', vedtekterRoutes)
 
 app.onError((err, c) => {
   if (err instanceof HTTPException) return c.json({ error: err.message }, err.status)
