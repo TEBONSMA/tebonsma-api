@@ -1,12 +1,11 @@
-import { ensureBotGroup, settleMarket, voidMarket } from '../bets.ts'
+import { settleMarket, voidMarket } from '../bets.ts'
 import { db } from '../db.ts'
 import { BOT } from './bot.ts'
 import { judgeClaude, planClaude } from './claude.ts'
-import { FOOTBALL_GROUP, forgetSummaries, judgeFootball, planFootball } from './football.ts'
 import type { Rule } from './rules.ts'
 
-// TebBet's bot: opens markets on Norway's matches, has Claude make markets on the news, and
-// decides every market that has a rule once the answer is in.
+// TebBet's bot: has Claude make markets on the news, and decides every market that has a rule
+// once the answer is in.
 
 const ROUND_MS = 10 * 60 * 1000
 
@@ -14,19 +13,16 @@ interface OpenRow {
   id: string
   kind: string
   rule: string
-  closes_at: string | null
 }
 
 // Every market the bot can decide that has closed: the ones whose answer is in are decided
 export async function decideAll() {
-  forgetSummaries()
   const open = db
-    .prepare("SELECT id, kind, rule, closes_at FROM bet_markets WHERE status = 'open' AND rule IS NOT NULL AND closes_at <= ?")
+    .prepare("SELECT id, kind, rule FROM bet_markets WHERE status = 'open' AND rule IS NOT NULL AND closes_at <= ?")
     .all(new Date().toISOString()) as unknown as OpenRow[]
   for (const market of open) {
     try {
-      const rule = JSON.parse(market.rule) as Rule
-      const verdict = rule.type === 'claude' ? await judgeClaude(market.id, rule) : await judgeFootball(rule, market.closes_at!)
+      const verdict = await judgeClaude(market.id, JSON.parse(market.rule) as Rule)
       if (!verdict) continue
       const finding = { note: verdict.note, url: verdict.url }
       const outcomeAt = (position: number) =>
@@ -51,7 +47,6 @@ export async function runBots() {
   running = true
   try {
     for (const [what, step] of [
-      ['plan football', planFootball],
       ['plan with Claude', () => planClaude()],
       ['decide markets', decideAll],
     ] as const) {
@@ -68,7 +63,6 @@ export async function runBots() {
 
 // BOTS=off leaves the bot out, as in local development unless asked for
 export function startBots() {
-  ensureBotGroup(FOOTBALL_GROUP, 'Landslaget', 'football')
   if (process.env.BOTS === 'off') return
   setTimeout(() => void runBots(), 20_000)
   setInterval(() => void runBots(), ROUND_MS)

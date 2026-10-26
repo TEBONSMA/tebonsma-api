@@ -388,6 +388,12 @@ describe('TebBet', () => {
     assert.equal(settled.status, 200, JSON.stringify(settled.data))
     const after = await call('GET', `/bet/groups/${group.data.id}`, 'dev')
     assert.deepEqual(after.data.markets.find((m: any) => m.id === snow.id).mine, {}, 'nothing rides on snow once rain lost')
+    // The front page counts every market, also those it leaves out; a combination counts on each
+    const listed = (await call('GET', '/bet/groups', 'dev')).data.groups.find((g: any) => g.id === group.data.id)
+    assert.equal(listed.markets.length, 2, 'decided today, so still listed')
+    const { lastDecidedAt, ...summary } = listed.summary
+    assert.deepEqual(summary, { markets: 2, decided: 1, staked: 200 })
+    assert.equal(lastDecidedAt, settled.data.settledAt)
 
     const log = await call('GET', '/bet/activity', 'kari')
     assert.equal(log.status, 200)
@@ -879,6 +885,7 @@ describe('the bot with Claude', () => {
     const blank = { winners: null, line: null, lowest: null, highest: null, spread: null }
     const snow = {
       ...blank,
+      group: 'Trøndelag',
       question: 'Kommer det snø i Trondheim før 1. november?',
       kind: 'yesno',
       outcomes: [{ label: 'Ja', odds: 2.5 }, { label: 'Nei', odds: 1.67 }],
@@ -891,6 +898,7 @@ describe('the bot with Claude', () => {
       snow,
       {
         ...blank,
+        group: 'Sport',
         question: 'Hvor mange mål blir det i Eliteserien i helgen?',
         kind: 'overunder',
         outcomes: [],
@@ -905,20 +913,24 @@ describe('the bot with Claude', () => {
       },
       { ...snow, question: 'Bare ett utfall?', kind: 'choice', outcomes: [{ label: 'Rosenborg', odds: 2 }] },
       { ...snow, question: 'Kommer det snø i Trondheim før 1. november?!' },
+      { ...snow, group: 'Nyheter', question: 'Blir det nyheter i morgen?' },
     ]
     const made = await call('POST', '/bet/bot/claude/plan', 'admin')
     assert.equal(made.status, 201, JSON.stringify(made.data))
-    assert.deepEqual(made.data, { created: 2, skipped: 2 }, 'one with a single outcome, and the same question again')
+    assert.deepEqual(made.data, { created: 2, skipped: 3 }, 'one with a single outcome, the same question again, and a group the bot has not')
 
     const [asked, resumed] = claudeAsked
     assert.equal(asked.model, 'claude-opus-5-5')
     assert.equal(asked.fallbacks, 'default')
     assert.ok(asked.tools.some((t: any) => t.type === 'web_search_20260209'))
     assert.equal(resumed.messages.at(-1).role, 'assistant', 'a paused search goes on where it stopped')
+    assert.match(asked.messages[0].content, /- Sport: /, 'Claude is told the groups')
 
-    const group = (await call('GET', '/bet/groups/claude', 'kari')).data
-    assert.equal(group.title, 'Nyheter')
-    const market = group.markets.find((m: any) => m.question === snow.question)
+    // Each market in its group, made the first time
+    const group = (await call('GET', '/bet/groups/trondelag', 'kari')).data
+    assert.equal(group.title, 'Trøndelag')
+    assert.deepEqual(group.markets.map((m: any) => m.question), [snow.question])
+    const market = group.markets[0]
     assert.equal(market.autoRule, `Avgjøres automatisk av Claude: ${snow.how}`)
     const yes = market.outcomes[0]
     const before = (await call('GET', '/bet/me', 'kari')).data.balance
@@ -932,12 +944,12 @@ describe('the bot with Claude', () => {
     assert.match(decision.messages[0].content, /0: Ja\n1: Nei/)
     assert.equal(claudeAsked.filter(r => r.tools.some((t: any) => t.name === 'avgjor')).length, 1, 'only the market that is due')
 
-    const after = (await call('GET', '/bet/groups/claude', 'kari')).data.markets
+    const after = (await call('GET', '/bet/groups/trondelag', 'kari')).data.markets
     const decided = after.find((m: any) => m.question === snow.question)
     assert.equal(decided.state, 'settled')
     assert.equal(decided.note, 'Det kom snø 28. oktober.')
     assert.equal(decided.noteUrl, 'https://www.yr.no/snø')
-    assert.equal(after.find((m: any) => m.kind === 'overunder').state, 'open')
+    assert.equal((await call('GET', '/bet/groups/sport', 'kari')).data.markets.find((m: any) => m.kind === 'overunder').state, 'open')
     assert.ok((await call('GET', '/bet/me', 'kari')).data.balance > before, 'the slip on Ja won')
 
     // Three questions at $0.11

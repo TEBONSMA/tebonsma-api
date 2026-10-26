@@ -42,8 +42,6 @@ function claudeConfig() {
   if (!process.env.ANTHROPIC_API_KEY) return null
   return {
     model: process.env.CLAUDE_MODEL ?? 'claude-opus-5-5',
-    // The group the markets go in, by its id or its title
-    group: process.env.CLAUDE_GROUP ?? 'Nyheter',
     // What the bot may spend in a calendar month, in US dollars, by its own count
     monthlyUsd: Number(process.env.CLAUDE_MONTHLY_USD ?? 20),
   }

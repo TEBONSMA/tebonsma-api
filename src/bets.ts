@@ -43,8 +43,8 @@ export const START_BALANCE = 1000
 export const WEEKLY_ALLOWANCE = 100
 // Mondays are counted in Norwegian time
 const TIME_ZONE = 'Europe/Oslo'
-// How long a decided market stays on the front page after its event
-const RECENT_MS = 14 * 24 * 60 * 60 * 1000
+// How long a decided market stays on the front page; on its event's or group's page it stays
+const RECENT_MS = 24 * 60 * 60 * 1000
 const BETS_SHOWN = 100
 const SLIPS_SHOWN = 100
 const LEDGER_SHOWN = 100
@@ -133,7 +133,7 @@ const SELECTION_INDEXES = `
 
 db.exec(`
   -- Collections of markets that aren't about an event, like "Andre spill" or one a bot fills.
-  -- The id is in the address (/gruppe/landslaget).
+  -- The id is in the address (/gruppe/sport).
   CREATE TABLE IF NOT EXISTS bet_groups (
     id         TEXT PRIMARY KEY,
     title      TEXT NOT NULL,
@@ -654,8 +654,35 @@ function toMarket(market: MarketRow, viewer: Viewer) {
 
 export type Market = ReturnType<typeof toMarket>
 
-const marketsOf = (eventId: string) =>
-  db.prepare('SELECT * FROM bet_markets WHERE event_id = ? ORDER BY position, created_at').all(eventId) as unknown as MarketRow[]
+// The markets of an event or a group in order: all of them, or for the front page the undecided
+// ones and those decided lately
+const marketsOf = (container: Container, all: boolean) =>
+  db
+    .prepare(
+      `SELECT * FROM bet_markets WHERE event_id IS ? AND group_id IS ? ${all ? '' : "AND (status = 'open' OR settled_at >= ?)"}
+       ORDER BY position, created_at`,
+    )
+    .all(container.eventId, container.groupId, ...(all ? [] : [recently()])) as unknown as MarketRow[]
+
+// All the markets of an event or a group, also those the front page leaves out: how many, how
+// many are decided and when the last one was, and what has been staked on each, added up
+function summaryOf(container: Container) {
+  const counts = db
+    .prepare(
+      `SELECT COUNT(*) AS markets, COALESCE(SUM(status != 'open'), 0) AS decided, MAX(settled_at) AS lastDecidedAt
+       FROM bet_markets WHERE event_id IS ? AND group_id IS ?`,
+    )
+    .get(container.eventId, container.groupId) as { markets: number; decided: number; lastDecidedAt: string | null }
+  const { staked } = db
+    .prepare(
+      `SELECT COALESCE(SUM(sl.stake), 0) AS staked
+       FROM (SELECT DISTINCT s.slip_id, s.market_id FROM bet_selections s JOIN bet_markets m ON m.id = s.market_id
+             WHERE m.event_id IS ? AND m.group_id IS ?) picked
+       JOIN bet_slips sl ON sl.id = picked.slip_id`,
+    )
+    .get(container.eventId, container.groupId) as { staked: number }
+  return { ...counts, staked }
+}
 
 // The sections of an event or a group, in order
 const sectionsOf = (container: Container) =>
@@ -672,7 +699,7 @@ function eventImage(postId: string) {
   return row ? `/feed/attachments/${row.id}` : null
 }
 
-async function toEvents(rows: EventRow[], viewer: Viewer) {
+async function toEvents(rows: EventRow[], viewer: Viewer, all = false) {
   const members = await getMembers(rows.map(row => row.author))
   return rows.map(row => {
     const manage = canManage(viewer, row)
@@ -689,26 +716,27 @@ async function toEvents(rows: EventRow[], viewer: Viewer) {
       organizer: members.get(row.author)!,
       canManage: manage,
       sections: sectionsOf(onEvent(row.id)),
-      markets: marketsOf(row.id).map(market => toMarket(market, viewer)),
+      markets: marketsOf(onEvent(row.id), all).map(market => toMarket(market, viewer)),
+      summary: summaryOf(onEvent(row.id)),
     }
   })
 }
 
 const recently = () => new Date(Date.now() - RECENT_MS).toISOString()
 
-// Events open for betting that are coming up or going on, and past ones whose markets are
-// still open or were decided lately. Soonest first, the ones without a date last.
+// Events open for betting that are coming up or going on, and past ones that had markets, which
+// the site shows among the finished games. Soonest first, the ones without a date last.
 export function listEvents(viewer: Viewer) {
   const rows = db
     .prepare(
       `${EVENT_SELECT}
        WHERE e.betting = 1 AND (
          e.ends_at IS NULL OR e.ends_at >= ?
-         OR EXISTS (SELECT 1 FROM bet_markets m WHERE m.event_id = e.post_id AND (m.status = 'open' OR m.settled_at >= ?))
+         OR EXISTS (SELECT 1 FROM bet_markets m WHERE m.event_id = e.post_id)
        )
        ORDER BY e.starts_at IS NULL, e.starts_at, p.created_at`,
     )
-    .all(now(), recently()) as unknown as EventRow[]
+    .all(now()) as unknown as EventRow[]
   return toEvents(rows, viewer)
 }
 
@@ -757,7 +785,7 @@ async function latestBets(viewer: Viewer, condition: string, ...params: string[]
 
 // One event with every market on it and the latest bets
 export async function getEvent(viewer: Viewer, id: string) {
-  const [event] = await toEvents([findEvent(id)], viewer)
+  const [event] = await toEvents([findEvent(id)], viewer, true)
   return { ...event, bets: await latestBets(viewer, 'm.event_id = ?', id) }
 }
 
@@ -785,14 +813,9 @@ export function setGroupImage(viewer: Viewer, id: string, jpeg: Uint8Array | nul
   return groupImage(id)
 }
 
-// A group with its undecided markets and those decided lately, in the admins' order
-function toGroup(group: GroupRow, viewer: Viewer) {
-  const rows = db
-    .prepare(
-      `SELECT * FROM bet_markets WHERE group_id = ? AND (status = 'open' OR settled_at >= ?)
-       ORDER BY position, created_at`,
-    )
-    .all(group.id, recently()) as unknown as MarketRow[]
+// A group with its markets in the admins' order: all of them on its page, the undecided ones and
+// those decided lately on the front page
+function toGroup(group: GroupRow, viewer: Viewer, all = false) {
   return {
     id: group.id,
     title: group.title,
@@ -802,7 +825,8 @@ function toGroup(group: GroupRow, viewer: Viewer) {
     bot: group.bot,
     canManage: viewer.admin,
     sections: sectionsOf(inGroup(group.id)),
-    markets: rows.map(market => toMarket(market, viewer)),
+    markets: marketsOf(inGroup(group.id), all).map(market => toMarket(market, viewer)),
+    summary: summaryOf(inGroup(group.id)),
   }
 }
 
@@ -813,9 +837,9 @@ export function listGroups(viewer: Viewer) {
   return { canManage: viewer.admin, front: front.map(row => row.item), groups: groups.map(group => toGroup(group, viewer)) }
 }
 
-// One group with the latest bets in it
+// One group with every market in it and the latest bets
 export async function getGroup(viewer: Viewer, id: string) {
-  return { ...toGroup(findGroup(id), viewer), bets: await latestBets(viewer, 'm.group_id = ?', id) }
+  return { ...toGroup(findGroup(id), viewer, true), bets: await latestBets(viewer, 'm.group_id = ?', id) }
 }
 
 // Lowercase letters, digits and dashes, from the title: "Trondheim by" is trondheim-by

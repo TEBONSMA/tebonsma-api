@@ -1,15 +1,17 @@
 import Anthropic from '@anthropic-ai/sdk'
-import { createMarket, ensureBotGroup, inGroup, type MarketInput } from '../bets.ts'
+import { createMarket, inGroup, type MarketInput } from '../bets.ts'
 import { config } from '../config.ts'
 import { db } from '../db.ts'
 import { readImport, readLine } from '../marketInput.ts'
 import { BOT } from './bot.ts'
+import { BOT_GROUPS, botGroupId, type BotGroup } from './groups.ts'
 import type { ClaudeRule, Verdict } from './rules.ts'
 import { osloDate, osloHour, weekday } from './time.ts'
 
-// Claude makes markets on what is going on in the world, Mondays and Thursdays, and decides
-// them once the answer is out, searching the web for both. Every call is counted in dollars, and
-// the bot stops for the month when it has spent what it may (CLAUDE_MONTHLY_USD).
+// Claude makes markets on what is going on in the world, Mondays and Thursdays, spread over the
+// bot's groups, and decides them once the answer is out, searching the web for both. Every call
+// is counted in dollars, and the bot stops for the month when it has spent what it may
+// (CLAUDE_MONTHLY_USD).
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS claude_usage (
@@ -39,9 +41,9 @@ db.exec(`
 // Monday and Thursday, from nine in the morning
 const PLAN_DAYS = [0, 3]
 const PLAN_HOUR = 9
-const MIN_MARKETS = 5
-const MAX_MARKETS = 8
-const PLAN_SEARCHES = 15
+const MIN_MARKETS = 8
+const MAX_MARKETS = 12
+const PLAN_SEARCHES = 20
 const DECIDE_SEARCHES = 6
 // A market must stay open a while (an hour, shorter to try the bot out: CLAUDE_MIN_OPEN_SECONDS),
 // and the answer must come within a month
@@ -56,7 +58,6 @@ const MAX_TURNS = 5
 const MAX_HOW_LENGTH = 300
 const MAX_NOTE_LENGTH = 400
 const MAX_URL_LENGTH = 500
-const GROUP_ID = 'claude'
 
 // Dollars per million tokens: input, output, cache writes (5 minutes) and cache reads; and
 // per web search. Another model is counted at the first one's prices.
@@ -154,10 +155,10 @@ const longTime = (time: Date | string) =>
 
 // --- Making markets
 
-const PLAN_SYSTEM = `Du lager spill til TebBet (bet.tebonsma.no), den private spillsiden til vennegjengen TEBONSMA i Trondheim. Medlemmene spiller om TEB-mynter, som er lekepenger. Spillene dine havner rett i en gruppe på siden, uten at noen ser over dem først, så de må være riktige, tydelige og gå an å avgjøre.
+const PLAN_SYSTEM = `Du lager spill til TebBet (bet.tebonsma.no), den private spillsiden til vennegjengen TEBONSMA i Trondheim. Medlemmene spiller om TEB-mynter, som er lekepenger. Spillene dine havner rett i gruppene på siden, uten at noen ser over dem først, så de må være riktige, tydelige og gå an å avgjøre.
 
 ## Oppgaven
-Søk på nettet etter det som skjer de neste ukene, og lag nye spill om dagsaktuelle hendelser med et klart, offentlig utfall. Bland temaene: sport (ikke Norges herrelandslag i fotball, de har en egen bot), norsk politikk og samfunn, Trondheim og Trøndelag, kultur, TV, musikk, teknologi, økonomi og vær. Bland typene (ja/nei, ett valg, flere riktige, over/under), og ta gjerne med ett litt sprøtt spill.
+Søk på nettet etter det som skjer de neste ukene, og lag nye spill om dagsaktuelle hendelser med et klart, offentlig utfall. Hvert spill hører til én av gruppene i oppgaven; fordel spillene på dem. Bland typene (ja/nei, ett valg, flere riktige, over/under), og ta gjerne med ett litt sprøtt spill.
 
 Finn aldri på fakta. Datoer, deltakere, tall og odds skal bygge på det du finner. Finner du ikke grunnlag, velg et annet spill.
 
@@ -165,6 +166,7 @@ Finn aldri på fakta. Datoer, deltakere, tall og odds skal bygge på det du finn
 Ingen spill om tragedier, krig, terror, dødsfall, sykdom, ulykker, kriminalitet med ofre eller privatpersoner. Offentlige personer går an, men bare i det de gjør offentlig. Morsomt og gjerne litt frekt, men aldri sårende.
 
 ## Hvert spill
+- group: gruppa spillet hører til, med navnet slik det står i oppgaven.
 - question: kort og tydelig, på norsk bokmål (egennavn som de er), høyst 140 tegn.
 - kind: yesno (utfallene Ja og Nei, i den rekkefølgen), choice (ett utfall slår inn, 2–10 utfall), multi (flere kan slå inn, 2–10 utfall) eller overunder (et tall).
 - outcomes: navn på høyst 60 tegn, unike. Tom liste for overunder.
@@ -176,7 +178,7 @@ Ingen spill om tragedier, krig, terror, dødsfall, sykdom, ulykker, kriminalitet
 - how: én eller to setninger om hvordan spillet avgjøres: hvilken kilde som gjelder, og hva som skjer ved uavgjort, utsettelse eller avlysning (da annulleres spillet som regel). Medlemmene ser den etter «Avgjøres automatisk av Claude:».
 - sources: én til tre lenker der svaret blir å finne.
 
-Lag ikke spill som ligner dem som allerede ligger i gruppa. Når du er ferdig, kall verktøyet lag_spill én gang med alle spillene.`
+Lag ikke spill som ligner dem som allerede ligger ute. Når du er ferdig, kall verktøyet lag_spill én gang med alle spillene.`
 
 const PLAN_TOOL: Anthropic.Beta.BetaTool = {
   name: 'lag_spill',
@@ -192,8 +194,9 @@ const PLAN_TOOL: Anthropic.Beta.BetaTool = {
         items: {
           type: 'object',
           additionalProperties: false,
-          required: ['question', 'kind', 'outcomes', 'winners', 'line', 'lowest', 'highest', 'spread', 'closesAt', 'decideAfter', 'how', 'sources'],
+          required: ['group', 'question', 'kind', 'outcomes', 'winners', 'line', 'lowest', 'highest', 'spread', 'closesAt', 'decideAfter', 'how', 'sources'],
           properties: {
+            group: { type: 'string', enum: BOT_GROUPS.map(group => group.title) },
             question: { type: 'string' },
             kind: { type: 'string', enum: ['yesno', 'choice', 'multi', 'overunder'] },
             outcomes: {
@@ -221,23 +224,13 @@ const PLAN_TOOL: Anthropic.Beta.BetaTool = {
   },
 }
 
-// The group the markets go in: the one named in the settings, by id or title, or else one of
-// the bot's own, made the first time
-function claudeGroup() {
-  const name = config.claude!.group
-  const found = db
-    .prepare('SELECT id FROM bet_groups WHERE id = ? OR lower(title) = lower(?) ORDER BY created_at LIMIT 1')
-    .get(name, name) as { id: string } | undefined
-  if (found) return found.id
-  ensureBotGroup(GROUP_ID, name, 'claude')
-  return GROUP_ID
-}
-
 const httpUrl = (raw: unknown) => typeof raw === 'string' && /^https?:\/\/\S+$/.test(raw) && raw.length <= MAX_URL_LENGTH
 const plainQuestion = (question: string) => question.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
 
 // A market from Claude, checked as an import is, and against the bot's own rules
-function readClaudeMarket(raw: Record<string, unknown>, now: number): { market: MarketInput; rule: ClaudeRule } {
+function readClaudeMarket(raw: Record<string, unknown>, now: number): { market: MarketInput; rule: ClaudeRule; group: BotGroup } {
+  const group = BOT_GROUPS.find(known => known.title === raw.group)
+  if (!group) throw new Error('ukjent gruppe')
   const { kind } = raw
   const body = {
     question: raw.question,
@@ -255,7 +248,7 @@ function readClaudeMarket(raw: Record<string, unknown>, now: number): { market: 
   const how = readLine(raw.how, 'Avgjørelsen', MAX_HOW_LENGTH)
   if (!how) throw new Error('mangler hvordan spillet avgjøres')
   const sources = (Array.isArray(raw.sources) ? raw.sources : []).filter(httpUrl).slice(0, 3) as string[]
-  return { market, rule: { type: 'claude', how, decideAfter: new Date(decideAfter).toISOString(), sources } }
+  return { market, rule: { type: 'claude', how, decideAfter: new Date(decideAfter).toISOString(), sources }, group }
 }
 
 let planning = false
@@ -274,18 +267,21 @@ export async function planClaude(force = false) {
   planning = true
   try {
     db.prepare('INSERT OR IGNORE INTO claude_runs (day, at) VALUES (?, ?)').run(day, now.toISOString())
-    const groupId = claudeGroup()
-    const { title } = db.prepare('SELECT title FROM bet_groups WHERE id = ?').get(groupId) as { title: string }
     const monthAgo = new Date(now.getTime() - MAX_AHEAD_MS).toISOString()
+    // What is open or decided lately in the bot's groups, and Claude's markets wherever they are
     const known = db
-      .prepare("SELECT question FROM bet_markets WHERE group_id = ? AND (status = 'open' OR settled_at >= ?) ORDER BY created_at")
-      .all(groupId, monthAgo) as { question: string }[]
+      .prepare(
+        `SELECT m.question, g.title FROM bet_markets m JOIN bet_groups g ON g.id = m.group_id
+         WHERE (g.bot = 'claude' OR json_extract(m.rule, '$.type') = 'claude') AND (m.status = 'open' OR m.settled_at >= ?)
+         ORDER BY m.created_at`,
+      )
+      .all(monthAgo) as { question: string; title: string }[]
     const prompt = [
       `Nå er det ${longTime(now)} i Norge (${now.toISOString()}).`,
-      `Lag ${MIN_MARKETS}–${MAX_MARKETS} nye spill til gruppa «${title}».`,
+      `Lag ${MIN_MARKETS}–${MAX_MARKETS} nye spill, fordelt på gruppene, helst minst ett i hver:\n${BOT_GROUPS.map(g => `- ${g.title}: ${g.about}`).join('\n')}`,
       known.length
-        ? `Disse ligger allerede i gruppa eller er nylig avgjort, så ikke lag noe som ligner:\n${known.map(m => `- ${m.question}`).join('\n')}`
-        : 'Gruppa er tom.',
+        ? `Disse ligger allerede ute eller er nylig avgjort, så ikke lag noe som ligner:\n${known.map(m => `- ${m.question} (${m.title})`).join('\n')}`
+        : 'Det ligger ingen spill ute.',
     ].join('\n\n')
 
     const answer = await ask('plan', PLAN_SYSTEM, prompt, PLAN_TOOL, PLAN_SEARCHES, 'high')
@@ -296,10 +292,10 @@ export async function planClaude(force = false) {
     for (const raw of proposed) {
       try {
         if (created === MAX_MARKETS) throw new Error('for mange spill')
-        const { market, rule } = readClaudeMarket(raw ?? {}, Date.now())
+        const { market, rule, group } = readClaudeMarket(raw ?? {}, Date.now())
         const key = plainQuestion(market.question)
         if (taken.has(key)) throw new Error('finnes allerede')
-        createMarket(BOT, inGroup(groupId), { ...market, rule })
+        createMarket(BOT, inGroup(botGroupId(group)), { ...market, rule })
         taken.add(key)
         created++
       } catch (err) {
@@ -307,7 +303,7 @@ export async function planClaude(force = false) {
         console.error(`bot: left out Claude's market «${String(raw?.question)}»: ${err instanceof Error ? err.message : err}`)
       }
     }
-    console.log(`bot: Claude made ${created} markets in «${title}», left out ${skipped}`)
+    console.log(`bot: Claude made ${created} markets, left out ${skipped}`)
     return { created, skipped }
   } finally {
     planning = false

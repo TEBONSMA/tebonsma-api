@@ -103,7 +103,7 @@ or over/under, where members pick a line on a count (like 4,5 beers) and bet ove
 organizer can turn betting off for an event (`event.betting` on the post), which hides it from
 TebBet. Markets that aren't about an event are in **groups**, like "Andre spill" and
 "Sponsorer", which admins make, rename and run; admins also set the order of events and groups
-on the front page. The group "Landslaget" is filled by the bot (below). Whoever opens a market can
+on the front page. Groups like "Sport" and "Politikk" are filled by the bot (below). Whoever opens a market can
 keep members out of it, typically the one it is about: they see it but can't play on it, and
 bets they placed before stand. They don't see its odds or how the coins on it are spread, on the
 market or in anyone's bets. A **slip** is one bet:
@@ -117,14 +117,14 @@ can get a new closing time.
 | Method | Path | Does |
 |---|---|---|
 | GET | `/bet/me` | Own balance, coins in play, the next Monday, and `gifts`: rounds on the house left in Sponsorjakten and Fyllekjøring (`{ left, stake }` per game; every member gets ten at 25 coins in each, for their launch) |
-| GET | `/bet/events` | Coming events and recent results, with their markets and current odds |
+| GET | `/bet/events` | Coming events and past ones that had markets, with the markets still open or decided the last day, current odds, and `summary` of all of them (`markets`, `decided`, `lastDecidedAt`, `staked`) |
 | GET | `/bet/events/:id` | One event, every market on it and the latest bets |
-| GET | `/bet/groups` | Every group with its markets, and `front`: where admins have put events and groups on the front page (`event:<id>`, `group:<id>`) |
-| GET | `/bet/groups/:id` | One group, its markets and the latest bets (`/bet/other` is "Andre spill", for the site before groups) |
+| GET | `/bet/groups` | Every group with its markets still open or decided the last day and `summary`, as for events, and `front`: where admins have put events and groups on the front page (`event:<id>`, `group:<id>`) |
+| GET | `/bet/groups/:id` | One group, every market in it and the latest bets (`/bet/other` is "Andre spill", for the site before groups) |
 | POST, PATCH, DELETE | `/bet/groups`, `/bet/groups/:id` | Make a group (`{ title }`, its id comes from the title), rename it, or delete one that has never had markets and no bot fills (admins) |
 | GET | `/tebbet/groups/:id/image` | A group's picture for its tile, open to anyone like a profile picture; its address in `image` carries a `?v=` that changes with it |
 | PUT, DELETE | `/tebbet/groups/:id/image` | Put up a picture for a group (`{ image }`, base64 JPEG up to 1 MB) or take it down (admins) |
-| PUT | `/bet/front` | The order of the front page from the top: `{ items: ['group:landslaget', 'event:<id>', …] }`. Events left out go by date among the other events, groups at the end |
+| PUT | `/bet/front` | The order of the front page from the top: `{ items: ['group:sport', 'event:<id>', …] }`. Events left out go by date among the other events, groups at the end |
 | GET | `/bet/members` | The members (`MEMBER_GROUP`), to keep out of a market or add as its outcomes |
 | POST | `/bet/events/:id/markets` | Open a market: `{ question, kind, outcomes: [{ label, odds }], closesAt, excluded }` |
 | POST | `/bet/groups/:id/markets` | Open a market in a group (admins), same body |
@@ -202,21 +202,18 @@ it is (0,3, 0,6 or 1,0 on a log scale). Lines lie halfway between whole numbers,
 always over or under.
 
 **The bot** (`src/bots`) runs inside the API every ten minutes, as `tebbet-bot`, an admin that
-never plays. It fills the group **Landslaget** with Norway's men's matches from ESPN's open but
-undocumented API (no key). It opens a winner, total goals, Norway's goals and "Does Haaland
-score?" market per match when the bookmaker's odds (DraftKings, in the match summary at ESPN)
-show up, at most two weeks ahead, turned into chances without the bookmaker's margin. Without
-them three days before kickoff it opens with odds from the Elo ratings at eloratings.net.
-Betting stops at kickoff and follows the match if it is moved. Goals are those of normal time;
-a cancelled match is called off, and so is the scorer market if the player doesn't play. What
-the bot found is kept with the market (`note`, `noteUrl`) and shown with it, and so is how it
-decides (`autoRule`). If an admin reopens a market the bot decided, the bot leaves it to them.
-`BOTS=off` keeps the bot from running.
+never plays. What it found when it decided a market is kept with the market (`note`, `noteUrl`)
+and shown with it, and so is how it decides (`autoRule`). If an admin reopens a market the bot
+decided, the bot leaves it to them. `BOTS=off` keeps the bot from running. It used to make
+markets on Norway's men's football matches as well, in the group Landslaget; those are in Sport
+now, and one still undecided is left to the admins.
 
-With an Anthropic API key (`ANTHROPIC_API_KEY`) the bot also has **Claude** make markets on the
+With an Anthropic API key (`ANTHROPIC_API_KEY`) the bot has **Claude** make markets on the
 news (`src/bots/claude.ts`). On Mondays and Thursdays from nine in the morning, Norwegian time,
-it asks Claude (`CLAUDE_MODEL`) with web search for five to eight new markets for the group
-`CLAUDE_GROUP` (by id or title, made if there is none). They are checked like an import and
+it asks Claude (`CLAUDE_MODEL`) with web search for eight to twelve new markets, spread over the
+bot's groups (`src/bots/groups.ts`: Sport, Politikk, Utenriks, Trøndelag, Kultur og
+underholdning, Økonomi og teknologi). A group admins have made with the same id or title is
+used as it is; the others are made the first time a market goes in them. They are checked like an import and
 against the bot's own rules (open at least an hour, the answer in within a month, a rule for how
 it is decided) and opened at once; the ones that fail are left out and logged. Each keeps how it
 is decided and when the answer should be in. From then on Claude looks the answer up, at most
@@ -455,10 +452,8 @@ the API posts to whatever address it is given. A subscription the push service s
 | `BOTS` | on | `off` keeps TebBet's bot from running (it is off in `npm run dev:mock` unless started with `--bots`) |
 | `ANTHROPIC_API_KEY` | none | Key for the Claude API. Without it the bot makes no markets with Claude |
 | `CLAUDE_MODEL` | `claude-opus-5-5` | The model the bot asks |
-| `CLAUDE_GROUP` | `Nyheter` | The group Claude's markets go in, by its id or its title |
 | `CLAUDE_MONTHLY_USD` | `20` | What the bot may spend with Claude in a calendar month, by its own count |
 | `CLAUDE_MIN_OPEN_SECONDS` | `3600` | How long a market Claude makes must stay open at least. Shorter lets you try it out |
-| `BOT_ODDS_DAYS`, `BOT_ELO_DAYS` | `14`, `3` | Days before kickoff the bot looks for bookmaker odds, and opens with Elo odds without them. Larger values let you try it out |
 | `MAIL_IMAP_HOST`, `MAIL_IMAP_PORT` | `mail.tebonsma.no`, `993` | Where mail is read (TLS from the start) |
 | `MAIL_SMTP_HOST`, `MAIL_SMTP_PORT` | `mail.tebonsma.no`, `465` | Where mail is sent |
 | `MAIL_SIEVE_HOST`, `MAIL_SIEVE_PORT` | `mail.tebonsma.no`, `4190` | ManageSieve, for the auto-reply |

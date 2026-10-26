@@ -20,7 +20,7 @@ process.env.LLDAP_URL ??= mockUrl
 process.env.LLDAP_USERNAME ??= 'mock'
 process.env.LLDAP_PASSWORD ??= 'mock'
 process.env.SITE_URL ??= 'http://localhost:5173'
-// The bot reads the news and ESPN; only with --bots
+// The bot asks Claude about the news; only with --bots
 if (!process.argv.includes('--bots')) process.env.BOTS ??= 'off'
 // The site, TebBet (bet.tebonsma.no), The Tebonsma Times and Tebonsma Tidsskrift on their own dev ports
 process.env.ALLOWED_ORIGINS ??= 'http://localhost:5173,http://localhost:5174,http://localhost:5175,http://localhost:5176'

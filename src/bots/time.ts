@@ -24,7 +24,3 @@ export const osloHour = (time: Date) =>
 
 // 0 is Monday
 export const weekday = (date: string) => (new Date(`${date}T12:00:00Z`).getUTCDay() + 6) % 7
-
-// "lør. 14. nov."
-export const shortDay = (time: string) =>
-  new Intl.DateTimeFormat('nb-NO', { timeZone: TIME_ZONE, weekday: 'short', day: 'numeric', month: 'short' }).format(new Date(time))
