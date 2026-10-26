@@ -330,19 +330,19 @@ export async function listForslag(caller: Caller) {
   }
 }
 
+// The changes in full, each with the paragraph as it reads now; if that differs from the
+// original, it changed after the proposal was written
+export function fullChanges(row: ForslagRow, places = paragraphs().places) {
+  return (JSON.parse(row.changes) as Change[]).map(change => {
+    const current = change.type === 'legge-til' ? null : (places.get(change.target)?.paragraph ?? null)
+    return { ...change, current: current ? originalOf(current) : null }
+  })
+}
+
 export async function getForslag(caller: Caller, number: number) {
   const row = findRow(number)
   const [summary] = await summaries([row])
-  const { places } = paragraphs()
-  const changes = (JSON.parse(row.changes) as Change[]).map(change => {
-    const current = change.type === 'legge-til' ? null : (places.get(change.target)?.paragraph ?? null)
-    return {
-      ...change,
-      // The paragraph as it reads now; if it differs from the original, it changed after the
-      // proposal was written
-      current: current ? originalOf(current) : null,
-    }
-  })
+  const changes = fullChanges(row)
   const commentRows = db
     .prepare('SELECT id, username, body, created_at FROM vedtekter_kommentarer WHERE forslag_id = ? ORDER BY created_at')
     .all(row.id) as { id: string; username: string; body: string; created_at: string }[]
