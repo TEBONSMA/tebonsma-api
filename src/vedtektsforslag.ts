@@ -6,6 +6,7 @@ import { config } from './config.ts'
 import { db, transaction } from './db.ts'
 import { bad, readText } from './feedRoutes.ts'
 import { readLine, readTime } from './marketInput.ts'
+import { listGroupMembers } from './lldap.ts'
 import { getMembers } from './members.ts'
 import { currentVersion } from './vedtekter.ts'
 
@@ -209,9 +210,28 @@ interface ArsmoteRow {
   started_at: string | null
 }
 
-export const canManage = (caller: Caller) => isAdmin(caller) || caller.groups.includes(config.vedtekter.protocolGroup)
+// Who is in the protocol group, as LLDAP has it now, so one put in or taken out there during the
+// årsmøte counts within seconds instead of at the next login. Until it has been read, or when
+// LLDAP cannot be reached, the groups in the login count.
+const PROTOCOL_MS = 15_000
+let protocol: { at: number; usernames: Set<string> } | null = null
+let reading = false
 
-const findRow = (number: number) => {
+function protocolGroup() {
+  if (!reading && (!protocol || Date.now() - protocol.at > PROTOCOL_MS)) {
+    reading = true
+    listGroupMembers(config.vedtekter.protocolGroup)
+      .then(usernames => (protocol = { at: Date.now(), usernames: new Set(usernames) }))
+      .catch(() => {})
+      .finally(() => (reading = false))
+  }
+  return protocol?.usernames ?? null
+}
+
+export const canManage = (caller: Caller) =>
+  isAdmin(caller) || (protocolGroup()?.has(caller.username) ?? caller.groups.includes(config.vedtekter.protocolGroup))
+
+export const findRow = (number: number) => {
   const row = db.prepare('SELECT * FROM vedtekter_forslag WHERE number = ?').get(number) as ForslagRow | undefined
   if (!row) throw new HTTPException(404, { message: 'Forslaget finnes ikke' })
   return row
