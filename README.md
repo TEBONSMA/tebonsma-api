@@ -215,8 +215,10 @@ decides (`autoRule`). If an admin reopens a market the bot decided, the bot leav
 
 With an Anthropic API key (`ANTHROPIC_API_KEY`) the bot also has **Claude** make markets on the
 news (`src/bots/claude.ts`). On Mondays and Thursdays from nine in the morning, Norwegian time,
-it asks Claude (`CLAUDE_MODEL`) with web search for five to eight new markets for the group
-`CLAUDE_GROUP` (by id or title, made if there is none). They are checked like an import and
+it asks Claude (`CLAUDE_MODEL`) with web search for eight to twelve new markets, spread over the
+bot's groups (`src/bots/groups.ts`: Sport, Politikk, Utenriks, Trøndelag, Kultur og
+underholdning, Økonomi og teknologi). A group admins have made with the same id or title is
+used as it is; the others are made the first time a market goes in them. They are checked like an import and
 against the bot's own rules (open at least an hour, the answer in within a month, a rule for how
 it is decided) and opened at once; the ones that fail are left out and logged. Each keeps how it
 is decided and when the answer should be in. From then on Claude looks the answer up, at most
@@ -455,7 +457,6 @@ the API posts to whatever address it is given. A subscription the push service s
 | `BOTS` | on | `off` keeps TebBet's bot from running (it is off in `npm run dev:mock` unless started with `--bots`) |
 | `ANTHROPIC_API_KEY` | none | Key for the Claude API. Without it the bot makes no markets with Claude |
 | `CLAUDE_MODEL` | `claude-opus-5-5` | The model the bot asks |
-| `CLAUDE_GROUP` | `Nyheter` | The group Claude's markets go in, by its id or its title |
 | `CLAUDE_MONTHLY_USD` | `20` | What the bot may spend with Claude in a calendar month, by its own count |
 | `CLAUDE_MIN_OPEN_SECONDS` | `3600` | How long a market Claude makes must stay open at least. Shorter lets you try it out |
 | `BOT_ODDS_DAYS`, `BOT_ELO_DAYS` | `14`, `3` | Days before kickoff the bot looks for bookmaker odds, and opens with Elo odds without them. Larger values let you try it out |
