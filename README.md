@@ -441,8 +441,9 @@ a JSON version of them on every change and publishes both here. Only members can
 Members propose changes to the vedtekter on the website. A proposal holds one or more changes,
 each to change (`endre`), add (`legge-til`, placed after a paragraph or first under one) or
 delete (`slette`) a paragraph, with the text as written in the vedtekter repo. A change
-remembers the paragraph as it read when it was written, so a later change to it shows. An
-amendment (`parent`) is another version of a proposal. A proposal starts as a draft (`utkast`)
+remembers the paragraph as it read when it was written, so a later change to it shows. A
+motforslag (`parent`) is another version of a proposal, voted against it; if that one is
+withdrawn, it stands on its own (`withdrawnParent`). A proposal starts as a draft (`utkast`)
 or is sent in (`innsendt`); its author can edit it until the deadline for the next årsmøte
 (a week before, § 3) and withdraw it (`trukket`). The protocol group (`PROTOCOL_GROUP`) and the
 admins set the next årsmøte, edit proposals after the deadline and record what the årsmøte
@@ -453,7 +454,7 @@ decided (`vedtatt`, `forkastet`). Two drafts are made the first time: the additi
 |---|---|---|
 | GET | `/vedtekter/forslag` | Every proposal in short, with `canManage` and the next `arsmote` (`startsAt`, `forslagFrist`, `sakslisteFrist`) |
 | POST | `/vedtekter/forslag` | Make one: `{ title, reason, changes: [{ type: 'endre', target, title, text } \| { type: 'legge-til', parent, after, title, text } \| { type: 'slette', target }], parent?, submit? }` |
-| GET, PATCH | `/vedtekter/forslag/:number` | One proposal with its changes, amendments, comments and what the caller `can` do; change it (same body) |
+| GET, PATCH | `/vedtekter/forslag/:number` | One proposal with its changes, motforslag, comments and what the caller `can` do; change it (same body) |
 | POST | `/vedtekter/forslag/:number/send-inn`, `/trekk` | Send a draft in, or withdraw a proposal |
 | POST | `/vedtekter/forslag/:number/status` | What the årsmøte decided (protocol group): `{ status: 'vedtatt' \| 'forkastet' \| 'innsendt' }` |
 | POST | `/vedtekter/forslag/:number/kommentarer` | Comment on it: `{ body }` |
@@ -463,7 +464,7 @@ At the årsmøte members check in and vote on their phones, and the protocol gro
 counted by hand in the room. The agenda (`saker`) holds the proposals, those to the same
 paragraphs as one case, and other cases the protocol group adds (`punkt`), in the order it puts
 them. In a case, a proposal sent in after the deadline is first taken up or not by 3/4 of those
-present (`opptak`, § 3; one not taken up goes on to the next årsmøte), an amendment is voted
+present (`opptak`, § 3; one not taken up goes on to the next årsmøte), a motforslag is voted
 against its proposal and competing proposals against each other (`kontra`, the most votes), and
 the one left against the vedtekter as they are (`endelig`, 2/3 of the votes cast, § 3.3). A tie
 for the most votes leaves the vote `likt` until the protocol group has it voted on again

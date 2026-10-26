@@ -13,8 +13,8 @@ import { currentVersion } from './vedtekter.ts'
 // Proposals to change the vedtekter, made on the website. § 3 of the vedtekter: proposals are sent
 // to the board at least a week before the årsmøte, the full agenda is out two days before, and
 // the årsmøte changes the vedtekter with 2/3. A proposal holds one or more changes to paragraphs,
-// as they are written in the vedtekter repo (vedtekter.md). An amendment (endringsforslag) is
-// another version of a proposal, voted against it. The protocol group runs the list and the
+// as they are written in the vedtekter repo (vedtekter.md). A counter-proposal (motforslag) is
+// another version of a proposal, voted against it; if that one is withdrawn, it stands on its own. The protocol group runs the list and the
 // dates of the årsmøte.
 db.exec(`
   CREATE TABLE IF NOT EXISTS vedtekter_arsmoter (
@@ -34,7 +34,7 @@ db.exec(`
     id           TEXT PRIMARY KEY,
     -- What members call it: forslag 3
     number       INTEGER NOT NULL UNIQUE,
-    -- An amendment: another version of this proposal
+    -- A motforslag: another version of this proposal
     parent_id    TEXT REFERENCES vedtekter_forslag (id),
     title        TEXT NOT NULL,
     reason       TEXT NOT NULL,
@@ -231,6 +231,13 @@ function protocolGroup() {
 export const canManage = (caller: Caller) =>
   isAdmin(caller) || (protocolGroup()?.has(caller.username) ?? caller.groups.includes(config.vedtekter.protocolGroup))
 
+// The proposal a motforslag is against, unless that has been withdrawn: then it stands on its own
+export function liveParent(row: ForslagRow) {
+  if (!row.parent_id) return null
+  const parent = db.prepare('SELECT * FROM vedtekter_forslag WHERE id = ?').get(row.parent_id) as ForslagRow | undefined
+  return parent && parent.status !== 'trukket' ? parent : null
+}
+
 export const findRow = (number: number) => {
   const row = db.prepare('SELECT * FROM vedtekter_forslag WHERE number = ?').get(number) as ForslagRow | undefined
   if (!row) throw new HTTPException(404, { message: 'Forslaget finnes ikke' })
@@ -279,23 +286,27 @@ export async function summaries(rows: ForslagRow[]) {
   const amendments = counts("SELECT parent_id AS id, COUNT(*) AS n FROM vedtekter_forslag WHERE parent_id IS NOT NULL AND status != 'trukket' GROUP BY parent_id")
   const comments = counts('SELECT forslag_id AS id, COUNT(*) AS n FROM vedtekter_kommentarer GROUP BY forslag_id')
   const parents = new Map(
-    (db.prepare('SELECT id, number FROM vedtekter_forslag').all() as { id: string; number: number }[]).map(row => [row.id, row.number]),
+    (db.prepare('SELECT id, number, status FROM vedtekter_forslag').all() as { id: string; number: number; status: Status }[]).map(row => [row.id, row]),
   )
   const { places } = paragraphs()
   return rows.map(row => {
     const meeting = arsmoteFor(row, all)
     const changes = JSON.parse(row.changes) as Change[]
+    const parent = row.parent_id ? parents.get(row.parent_id) : undefined
+    const against = parent && parent.status !== 'trukket' ? parent.number : null
     return {
       number: row.number,
-      parent: row.parent_id ? (parents.get(row.parent_id) ?? null) : null,
+      // The proposal this is a motforslag to, or the one it was to before that was withdrawn
+      parent: against,
+      withdrawnParent: parent && against === null ? parent.number : null,
       title: row.title,
       status: row.status,
       author: members.get(row.created_by)!,
       createdAt: row.created_at,
       submittedAt: row.submitted_at,
       arsmote: meeting?.id ?? null,
-      // Sent in after the deadline for the årsmøte it is for; an amendment can be made in the meeting
-      late: !!(!row.parent_id && row.submitted_at && meeting && row.submitted_at > meeting.forslagFrist),
+      // Sent in after the deadline for the årsmøte it is for; a motforslag can be made in the meeting
+      late: !!(against === null && row.submitted_at && meeting && row.submitted_at > meeting.forslagFrist),
       // Which paragraphs, in words: "Endrer § 4.2.3"
       changes: changes.map(change => describe(change, places)),
       amendments: amendments.get(row.id) ?? 0,
@@ -369,7 +380,7 @@ export async function getForslag(caller: Caller, number: number) {
       submit: row.status === 'utkast' && (mine || manager),
       withdraw: open && (mine || manager),
       decide: manager,
-      amend: open && !row.parent_id,
+      amend: open && !liveParent(row),
     },
   }
 }
@@ -401,7 +412,7 @@ export async function createForslag(caller: Caller, input: ForslagInput) {
   let parentId: string | null = null
   if (input.parent != null) {
     const parent = findRow(Number(input.parent))
-    if (parent.parent_id) throw bad('Et endringsforslag kan ikke få endringsforslag')
+    if (liveParent(parent)) throw bad('Et motforslag kan ikke få motforslag')
     if (parent.status !== 'utkast' && parent.status !== 'innsendt') throw bad('Forslaget er ikke lenger åpent')
     parentId = parent.id
   }

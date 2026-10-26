@@ -12,6 +12,7 @@ import {
   currentArsmote,
   findRow,
   fullChanges,
+  liveParent,
   paragraphs,
   summaries,
   type Change,
@@ -232,17 +233,18 @@ function cases(meetingId: string) {
 const votedIn = (forslagId: string, meetingId: string) =>
   !!db.prepare('SELECT 1 FROM vedtekter_voteringer WHERE arsmote_id = ? AND (forslag_a = ? OR forslag_b = ?)').get(meetingId, forslagId, forslagId)
 
-// A proposal sent in after the deadline is not on the agenda (§ 3). An amendment to one that is
+// A proposal sent in after the deadline is not on the agenda (§ 3). A motforslag to one that is
 // can be made in the meeting.
 const late = (row: ForslagRow, meetingId: string) => {
   const meeting = arsmoter().find(item => item.id === meetingId)
-  return !row.parent_id && !!meeting && !!row.submitted_at && row.submitted_at > meeting.forslagFrist
+  return !liveParent(row) && !!meeting && !!row.submitted_at && row.submitted_at > meeting.forslagFrist
 }
 
 // For a late proposal: still to be decided, taken up, or not (then it goes on to the next årsmøte).
-// An amendment goes with its proposal: left out if that is.
+// A motforslag goes with its proposal: left out if that is.
 function opptakOf(row: ForslagRow, meetingId: string): 'kreves' | 'tatt-opp' | 'ikke-tatt-opp' | null {
-  if (row.parent_id) return opptakOf(rowById(row.parent_id), meetingId) === 'ikke-tatt-opp' ? 'ikke-tatt-opp' : null
+  const parent = liveParent(row)
+  if (parent) return opptakOf(parent, meetingId) === 'ikke-tatt-opp' ? 'ikke-tatt-opp' : null
   if (!late(row, meetingId)) return null
   const vote = db
     .prepare("SELECT result FROM vedtekter_voteringer WHERE arsmote_id = ? AND kind = 'opptak' AND forslag_a = ? AND status = 'lukket' ORDER BY closed_at DESC")
