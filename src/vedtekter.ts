@@ -1,4 +1,5 @@
 import { HTTPException } from 'hono/http-exception'
+import sanitizeHtml from 'sanitize-html'
 import { db } from './db.ts'
 
 // The vedtekter as the vedtekter repo builds them: the document as JSON (paragraphs with their
@@ -28,6 +29,32 @@ interface VersionRow {
   published_at: string
 }
 
+// The build only writes these, but the site shows the HTML as it is, so nothing else gets through
+const cleanHtml = (value: unknown) =>
+  typeof value === 'string'
+    ? sanitizeHtml(value, {
+        allowedTags: ['p', 'br', 'strong', 'em', 'u', 'ul', 'ol', 'li', 'sup', 'a'],
+        allowedAttributes: { a: ['href', 'id'] },
+        allowedSchemes: ['https'],
+      })
+    : ''
+
+interface Paragraph {
+  html?: unknown
+  tittelHtml?: unknown
+  barn?: unknown
+}
+
+function cleanParagraphs(paragraphs: unknown): Paragraph[] {
+  if (!Array.isArray(paragraphs)) return []
+  return paragraphs.map((paragraph: Paragraph) => ({
+    ...paragraph,
+    html: cleanHtml(paragraph.html),
+    tittelHtml: cleanHtml(paragraph.tittelHtml),
+    barn: cleanParagraphs(paragraph.barn),
+  }))
+}
+
 function readDocument(text: string) {
   if (text.length > MAX_DOCUMENT) throw bad('Dokumentet er for stort')
   let document: unknown
@@ -41,7 +68,15 @@ function readDocument(text: string) {
   for (const field of TEXT_FIELDS) {
     if (typeof fields[field] !== 'string') throw bad(`Dokumentet mangler ${field}`)
   }
-  return fields
+  const notes = (list: unknown) =>
+    Array.isArray(list) ? list.map((note: { html?: unknown }) => ({ ...note, html: cleanHtml(note.html) })) : []
+  return {
+    ...fields,
+    sammendrag: cleanHtml(fields.sammendrag),
+    paragrafer: cleanParagraphs(fields.paragrafer),
+    fotnoter: notes(fields.fotnoter),
+    kilder: notes(fields.kilder),
+  }
 }
 
 // A build from the vedtekter repo. The same commit again (a rerun) replaces the newest version

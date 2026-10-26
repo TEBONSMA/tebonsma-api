@@ -1169,7 +1169,16 @@ describe('the vedtekter', () => {
     vedtatt: 'Vedtatt på ordinært årsmøte',
     versjon: '0.1.7',
     dato: '2026-10-26',
-    paragrafer: [{ id: 'foreningen', nummer: '1', tittel: 'Foreningen', barn: [] }],
+    paragrafer: [
+      {
+        id: 'foreningen',
+        nummer: '1',
+        tittel: 'Foreningen',
+        tittelHtml: 'Foreningen',
+        html: '<p>Se <a href="#navn">§ 1.1</a><script>alert(1)</script><img src="x" onerror="alert(1)"></p>',
+        barn: [],
+      },
+    ],
   }
   // As the vedtekter repo's workflow sends a build
   const publish = async (key: string, fields: { commit: string; dokument: string; pdf: Uint8Array<ArrayBuffer> }) => {
@@ -1197,6 +1206,7 @@ describe('the vedtekter', () => {
     assert.equal(read.data.tittel, document.tittel)
     assert.equal(read.data.commit, commit)
     assert.equal(read.data.paragrafer[0].id, 'foreningen')
+    assert.equal(read.data.paragrafer[0].html, '<p>Se <a href="#navn">§ 1.1</a></p>', 'only the markup the build writes')
 
     assert.equal((await call('GET', '/vedtekter/pdf', null)).status, 401)
     const res = await fetch(`${API}/vedtekter/pdf`, { headers: { Authorization: 'Bearer mock-access.kari' } })
