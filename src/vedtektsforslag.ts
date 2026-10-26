@@ -20,6 +20,12 @@ db.exec(`
     id         TEXT PRIMARY KEY,
     title      TEXT NOT NULL,
     starts_at  TEXT NOT NULL,
+    -- Planned until the protocol group starts it; while it goes on, members check in and vote
+    state      TEXT NOT NULL DEFAULT 'planlagt' CHECK (state IN ('planlagt', 'pågår', 'avsluttet')),
+    started_at TEXT,
+    ended_at   TEXT,
+    -- JSON: the order the protocol group put the cases in, as forslag:3 and punkt:<id>
+    agenda     TEXT NOT NULL DEFAULT '[]',
     created_at TEXT NOT NULL
   );
 
@@ -199,6 +205,8 @@ interface ArsmoteRow {
   id: string
   title: string
   starts_at: string
+  state: 'planlagt' | 'pågår' | 'avsluttet'
+  started_at: string | null
 }
 
 export const canManage = (caller: Caller) => isAdmin(caller) || caller.groups.includes(config.vedtekter.protocolGroup)
@@ -215,18 +223,30 @@ function toArsmote(row: ArsmoteRow) {
     id: row.id,
     title: row.title,
     startsAt: row.starts_at,
+    state: row.state,
+    startedAt: row.started_at,
     // Proposals sent in later can only be taken up if 3/4 of those present demand it
     forslagFrist: new Date(starts - PROPOSAL_DAYS * DAY_MS).toISOString(),
     sakslisteFrist: new Date(starts - AGENDA_DAYS * DAY_MS).toISOString(),
   }
 }
 
-const arsmoter = () => (db.prepare('SELECT id, title, starts_at FROM vedtekter_arsmoter ORDER BY starts_at').all() as unknown as ArsmoteRow[]).map(toArsmote)
+export const arsmoter = () =>
+  (db.prepare('SELECT id, title, starts_at, state, started_at FROM vedtekter_arsmoter ORDER BY starts_at').all() as unknown as ArsmoteRow[]).map(toArsmote)
 
-// The årsmøte a proposal is for: the first after it was sent in (or now, for a draft)
-const arsmoteFor = (row: ForslagRow, all: ReturnType<typeof arsmoter>) => {
+// The årsmøte going on, or else the one planned. It stays planned until it is started or moved,
+// also when it starts later than it was set to.
+export function currentArsmote() {
+  const all = arsmoter()
+  return all.find(meeting => meeting.state === 'pågår') ?? all.find(meeting => meeting.state === 'planlagt') ?? null
+}
+
+// The årsmøte a proposal is for: the first after it was sent in (or now, for a draft), or the one
+// going on when it was sent in. One still open after an årsmøte has ended goes on to the next.
+export const arsmoteFor = (row: ForslagRow, all: ReturnType<typeof arsmoter>) => {
   const from = row.status === 'utkast' ? new Date().toISOString() : (row.submitted_at ?? row.created_at)
-  return all.find(meeting => meeting.startsAt > from) ?? null
+  const open = row.status === 'utkast' || row.status === 'innsendt'
+  return all.find(meeting => (meeting.startsAt > from || meeting.state === 'pågår') && !(open && meeting.state === 'avsluttet')) ?? null
 }
 
 // --- Reading
@@ -282,12 +302,10 @@ function describe(change: Change, places: Map<string, Place>) {
 
 export async function listForslag(caller: Caller) {
   const rows = db.prepare('SELECT * FROM vedtekter_forslag ORDER BY number').all() as unknown as ForslagRow[]
-  const all = arsmoter()
-  const now = new Date().toISOString()
   return {
     canManage: canManage(caller),
-    // The next årsmøte, with the deadlines in § 3
-    arsmote: all.find(meeting => meeting.startsAt > now) ?? null,
+    // The årsmøte going on or the next one, with the deadlines in § 3
+    arsmote: currentArsmote(),
     forslag: await summaries(rows),
   }
 }
@@ -462,11 +480,12 @@ export function setArsmote(caller: Caller, input: { title?: unknown; startsAt?: 
   if (!title) throw bad('Årsmøtet trenger et navn')
   const startsAt = readTime(input.startsAt ?? null)
   if (!startsAt) throw bad('Årsmøtet trenger et tidspunkt')
-  const now = new Date().toISOString()
-  const next = db.prepare('SELECT id FROM vedtekter_arsmoter WHERE starts_at > ? ORDER BY starts_at LIMIT 1').get(now) as { id: string } | undefined
-  if (next) db.prepare('UPDATE vedtekter_arsmoter SET title = ?, starts_at = ? WHERE id = ?').run(title, startsAt, next.id)
-  else db.prepare('INSERT INTO vedtekter_arsmoter (id, title, starts_at, created_at) VALUES (?, ?, ?, ?)').run(randomUUID(), title, startsAt, now)
-  return arsmoter().find(meeting => meeting.startsAt > now) ?? null
+  const current = currentArsmote()
+  // The deadlines follow from when it was to start, so that stays once it has started
+  if (current?.state === 'pågår' && startsAt !== current.startsAt) throw bad('Tidspunktet kan ikke endres etter at årsmøtet har startet')
+  if (current) db.prepare('UPDATE vedtekter_arsmoter SET title = ?, starts_at = ? WHERE id = ?').run(title, startsAt, current.id)
+  else db.prepare('INSERT INTO vedtekter_arsmoter (id, title, starts_at, created_at) VALUES (?, ?, ?, ?)').run(randomUUID(), title, startsAt, new Date().toISOString())
+  return currentArsmote()
 }
 
 // The two additions the årsmøte on 20 December 2025 decided (sak 007), which never got a text.
