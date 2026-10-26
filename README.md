@@ -117,10 +117,10 @@ can get a new closing time.
 | Method | Path | Does |
 |---|---|---|
 | GET | `/bet/me` | Own balance, coins in play, the next Monday, and `gifts`: rounds on the house left in Sponsorjakten and Fyllekjøring (`{ left, stake }` per game; every member gets ten at 25 coins in each, for their launch) |
-| GET | `/bet/events` | Coming events and recent results, with their markets and current odds |
+| GET | `/bet/events` | Coming events and past ones that had markets, with the markets still open or decided the last day, current odds, and `summary` of all of them (`markets`, `decided`, `lastDecidedAt`, `staked`) |
 | GET | `/bet/events/:id` | One event, every market on it and the latest bets |
-| GET | `/bet/groups` | Every group with its markets, and `front`: where admins have put events and groups on the front page (`event:<id>`, `group:<id>`) |
-| GET | `/bet/groups/:id` | One group, its markets and the latest bets (`/bet/other` is "Andre spill", for the site before groups) |
+| GET | `/bet/groups` | Every group with its markets still open or decided the last day and `summary`, as for events, and `front`: where admins have put events and groups on the front page (`event:<id>`, `group:<id>`) |
+| GET | `/bet/groups/:id` | One group, every market in it and the latest bets (`/bet/other` is "Andre spill", for the site before groups) |
 | POST, PATCH, DELETE | `/bet/groups`, `/bet/groups/:id` | Make a group (`{ title }`, its id comes from the title), rename it, or delete one that has never had markets and no bot fills (admins) |
 | GET | `/tebbet/groups/:id/image` | A group's picture for its tile, open to anyone like a profile picture; its address in `image` carries a `?v=` that changes with it |
 | PUT, DELETE | `/tebbet/groups/:id/image` | Put up a picture for a group (`{ image }`, base64 JPEG up to 1 MB) or take it down (admins) |

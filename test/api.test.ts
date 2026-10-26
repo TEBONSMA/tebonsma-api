@@ -388,6 +388,12 @@ describe('TebBet', () => {
     assert.equal(settled.status, 200, JSON.stringify(settled.data))
     const after = await call('GET', `/bet/groups/${group.data.id}`, 'dev')
     assert.deepEqual(after.data.markets.find((m: any) => m.id === snow.id).mine, {}, 'nothing rides on snow once rain lost')
+    // The front page counts every market, also those it leaves out; a combination counts on each
+    const listed = (await call('GET', '/bet/groups', 'dev')).data.groups.find((g: any) => g.id === group.data.id)
+    assert.equal(listed.markets.length, 2, 'decided today, so still listed')
+    const { lastDecidedAt, ...summary } = listed.summary
+    assert.deepEqual(summary, { markets: 2, decided: 1, staked: 200 })
+    assert.equal(lastDecidedAt, settled.data.settledAt)
 
     const log = await call('GET', '/bet/activity', 'kari')
     assert.equal(log.status, 200)
