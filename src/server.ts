@@ -21,6 +21,7 @@ import { settleLandedRounds } from './rounds.ts'
 import { pushRoutes } from './pushRoutes.ts'
 import { pressRoutes } from './pressRoutes.ts'
 import { vedtekterRoutes } from './vedtekterRoutes.ts'
+import { vedtektsforslagRoutes } from './vedtektsforslagRoutes.ts'
 import { getProfile as readProfile, setAvatar, updateProfile, type ProfileChanges } from './lldap.ts'
 import { rememberProfile } from './members.ts'
 import { getLeaderboard, isGame, ScoreRejected, startRun, submitScore } from './scoreboard.ts'
@@ -150,6 +151,7 @@ app.route('/', memberRoutes)
 app.route('/', pushRoutes)
 app.route('/', pressRoutes)
 app.route('/', vedtekterRoutes)
+app.route('/', vedtektsforslagRoutes)
 
 app.onError((err, c) => {
   if (err instanceof HTTPException) return c.json({ error: err.message }, err.status)

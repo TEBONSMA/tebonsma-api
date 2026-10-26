@@ -1229,4 +1229,90 @@ describe('the vedtekter', () => {
     assert.equal((await call('GET', '/vedtekter', 'kari')).data.versjon, '0.1.8')
   })
 
+  it('takes proposals to change them, amendments and comments, and lets the protocol group decide', async () => {
+    const paragraph = (id: string, nummer: string, tittel: string, kilde: string, barn: object[] = []) => ({
+      id,
+      nummer,
+      tittel,
+      tittelHtml: tittel,
+      kilde,
+      html: `<p>${kilde}</p>`,
+      barn,
+    })
+    const tree = [
+      paragraph('foreningen', '1', 'Foreningen', 'Om foreningen.', [paragraph('navn', '1.1', 'Navn', 'Navnet er TEBONSMA.')]),
+      paragraph('styret', '2', 'Styret', 'Sju medlemmer.', [
+        paragraph('styretitler', '2.1', 'Styretitler', '', [paragraph('prop-hunter', '2.1.1', 'Prop-hunter / Styremedlem', 'Skaffer rekvisitter.')]),
+      ]),
+      paragraph('bedrukkenhet', '3', 'Bedrukkenhet', 'Alkohol.'),
+    ]
+    assert.equal((await publish('mock', { commit: 'c'.repeat(40), dokument: JSON.stringify({ ...document, paragrafer: tree }), pdf })).status, 201)
+
+    assert.equal((await call('GET', '/vedtekter/forslag', null)).status, 401)
+    const start = (await call('GET', '/vedtekter/forslag', 'kari')).data
+    assert.equal(start.canManage, false)
+    assert.equal(start.arsmote, null)
+    assert.deepEqual(
+      start.forslag.map((f: any) => [f.number, f.title, f.status]),
+      [
+        [1, 'Kriseteam på alle fester', 'utkast'],
+        [2, 'Mangfold- og inkluderingsansvarlig', 'utkast'],
+      ],
+      'the two additions from the årsmøte in 2025, still without a text',
+    )
+    assert.deepEqual(start.forslag[1].changes, [
+      { type: 'legge-til', title: 'Mangfold- og inkluderingsansvarlig / Styremedlem', parent: '§ 2.1', after: '§ 2.1.1' },
+    ])
+
+    const propose = (user: string, body: object) => call('POST', '/vedtekter/forslag', user, { reason: '', ...body })
+    const rename = { type: 'endre', target: 'navn', title: 'Navn', text: 'Navnet er TEBONSMA, og det skal du ikke glemme.' }
+    assert.equal((await propose('kari', { title: 'Ingenting', changes: [{ ...rename, text: 'Navnet er TEBONSMA.' }], submit: true })).status, 400)
+    assert.equal((await propose('kari', { title: 'Feil sted', changes: [{ type: 'endre', target: 'finnes-ikke', title: 'X', text: '' }] })).status, 400)
+    const made = await propose('kari', { title: 'Husk navnet', reason: 'Folk glemmer.', changes: [rename], submit: true })
+    assert.equal(made.status, 201, JSON.stringify(made.data))
+    assert.equal(made.data.number, 3)
+    assert.equal(made.data.status, 'innsendt')
+    assert.equal(made.data.changes[0].original.kilde, 'Navnet er TEBONSMA.')
+    assert.equal(made.data.author.name, 'Kari Nordmann')
+
+    // A new paragraph goes after one of those under the parent it is placed in
+    const add = (after: string | null) => ({ type: 'legge-til', parent: 'styret', after, title: 'Kasserer', text: '' })
+    assert.equal((await propose('kari', { title: 'Ny', changes: [add('navn')] })).status, 400)
+    const draft = await propose('kari', { title: 'Kasserer i styret', changes: [add('styretitler')] })
+    assert.equal(draft.status, 201, JSON.stringify(draft.data))
+    assert.equal(draft.data.status, 'utkast')
+    assert.equal((await call('POST', '/vedtekter/forslag/4/send-inn', 'ola')).status, 403, 'not her draft')
+    assert.equal((await call('POST', '/vedtekter/forslag/4/send-inn', 'kari')).data.status, 'innsendt')
+    const removeAndChange = [{ type: 'slette', target: 'styret' }, { type: 'endre', target: 'prop-hunter', title: 'X', text: 'Y' }]
+    assert.equal((await propose('kari', { title: 'Rot', changes: removeAndChange, submit: true })).status, 400)
+
+    assert.equal((await call('PATCH', '/vedtekter/forslag/3', 'ola', { title: 'Mitt nå', changes: [rename] })).status, 403)
+    const amendment = await propose('ola', { title: 'Husk navnet, men kortere', parent: 3, changes: [{ ...rename, text: 'Navnet er TEBONSMA. Husk det.' }], submit: true })
+    assert.equal(amendment.status, 201, JSON.stringify(amendment.data))
+    assert.equal(amendment.data.parent, 3)
+    assert.equal((await propose('ola', { title: 'Enda kortere', parent: 5, changes: [rename] })).status, 400, 'no amendments to amendments')
+    const commented = await call('POST', '/vedtekter/forslag/3/kommentarer', 'ola', { body: 'Godt forslag' })
+    assert.equal(commented.status, 201)
+    assert.deepEqual(commented.data.comments.map((c: any) => [c.author.name, c.body]), [['Ola Nordmann', 'Godt forslag']])
+    assert.deepEqual(commented.data.amendments.map((a: any) => a.number), [5])
+
+    assert.equal((await call('POST', '/vedtekter/forslag/4/trekk', 'kari')).data.status, 'trukket')
+    assert.equal((await call('POST', '/vedtekter/forslag/3/status', 'kari', { status: 'vedtatt' })).status, 403)
+    const decided = await call('POST', '/vedtekter/forslag/3/status', 'eirik', { status: 'vedtatt' })
+    assert.equal(decided.data.status, 'vedtatt')
+    assert.equal(decided.data.can.edit, false)
+
+    // The protocol group sets the årsmøte; the deadlines follow § 3
+    assert.equal((await call('PUT', '/vedtekter/arsmote', 'kari', { title: 'Årsmøte', startsAt: '2030-12-20T12:00:00.000Z' })).status, 403)
+    const meeting = await call('PUT', '/vedtekter/arsmote', 'eirik', { title: 'Ordinært årsmøte 2030', startsAt: '2030-12-20T12:00:00.000Z' })
+    assert.equal(meeting.status, 200, JSON.stringify(meeting.data))
+    assert.equal(meeting.data.forslagFrist, '2030-12-13T12:00:00.000Z')
+    assert.equal(meeting.data.sakslisteFrist, '2030-12-18T12:00:00.000Z')
+    const listed = (await call('GET', '/vedtekter/forslag', 'eirik')).data
+    assert.equal(listed.canManage, true)
+    assert.equal(listed.arsmote.title, 'Ordinært årsmøte 2030')
+    const five = listed.forslag.find((f: any) => f.number === 5)
+    assert.equal(five.arsmote, listed.arsmote.id)
+    assert.equal(five.late, false)
+  })
 })

@@ -77,7 +77,8 @@ const users = new Map<string, MockUser>([
       firstName: 'Eirik',
       lastName: 'Doktor',
       avatar: null,
-      groups: ['medlemmer', 'tidsskrift_redaksjon'],
+      // Also the one who runs the proposals to change the vedtekter
+      groups: ['medlemmer', 'tidsskrift_redaksjon', 'protokollforer'],
       createdAt: '2025-01-01T12:00:00Z',
     },
   ],

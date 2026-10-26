@@ -438,6 +438,27 @@ a JSON version of them on every change and publishes both here. Only members can
 | GET | `/vedtekter/pdf/lenke` | A link to the PDF that works without the login for an hour, so the browser opens it like any other PDF: `{ url, utloper }` |
 | PUT | `/vedtekter` | Publish a build, from the vedtekter repo's workflow with `Authorization: Bearer <VEDTEKTER_PUBLISH_KEY>`: multipart `commit`, `dokument` (the JSON) and `pdf`. Every version is kept; a rerun of the same commit replaces the newest |
 
+Members propose changes to the vedtekter on the website. A proposal holds one or more changes,
+each to change (`endre`), add (`legge-til`, placed after a paragraph or first under one) or
+delete (`slette`) a paragraph, with the text as written in the vedtekter repo. A change
+remembers the paragraph as it read when it was written, so a later change to it shows. An
+amendment (`parent`) is another version of a proposal. A proposal starts as a draft (`utkast`)
+or is sent in (`innsendt`); its author can edit it until the deadline for the next årsmøte
+(a week before, § 3) and withdraw it (`trukket`). The protocol group (`PROTOCOL_GROUP`) and the
+admins set the next årsmøte, edit proposals after the deadline and record what the årsmøte
+decided (`vedtatt`, `forkastet`). Two drafts are made the first time: the additions the
+årsmøte on 20 December 2025 decided without a text.
+
+| Method | Path | What |
+|---|---|---|
+| GET | `/vedtekter/forslag` | Every proposal in short, with `canManage` and the next `arsmote` (`startsAt`, `forslagFrist`, `sakslisteFrist`) |
+| POST | `/vedtekter/forslag` | Make one: `{ title, reason, changes: [{ type: 'endre', target, title, text } \| { type: 'legge-til', parent, after, title, text } \| { type: 'slette', target }], parent?, submit? }` |
+| GET, PATCH | `/vedtekter/forslag/:number` | One proposal with its changes, amendments, comments and what the caller `can` do; change it (same body) |
+| POST | `/vedtekter/forslag/:number/send-inn`, `/trekk` | Send a draft in, or withdraw a proposal |
+| POST | `/vedtekter/forslag/:number/status` | What the årsmøte decided (protocol group): `{ status: 'vedtatt' \| 'forkastet' \| 'innsendt' }` |
+| POST | `/vedtekter/forslag/:number/kommentarer` | Comment on it: `{ body }` |
+| PUT | `/vedtekter/arsmote` | Set or move the next årsmøte (protocol group): `{ title, startsAt }` |
+
 ## Requirements
 
 - Node.js 22.18 or newer, which runs the TypeScript sources directly (no build step), or Docker.
@@ -466,6 +487,7 @@ a JSON version of them on every change and publishes both here. Only members can
 | `CLAUDE_MODEL` | `claude-opus-5-5` | The model the bot asks |
 | `CLAUDE_MONTHLY_USD` | `20` | What the bot may spend with Claude in a calendar month, by its own count |
 | `CLAUDE_MIN_OPEN_SECONDS` | `3600` | How long a market Claude makes must stay open at least. Shorter lets you try it out |
+| `PROTOCOL_GROUP` | `protokollforer` | Group whose members run the proposals to change the vedtekter and the årsmøte, like the admins |
 | `VEDTEKTER_PUBLISH_KEY` | none (`mock` in `npm run dev:mock`) | The key the vedtekter repo publishes its builds with, a long random string kept as a secret there too. Without it publishing is off |
 | `MAIL_IMAP_HOST`, `MAIL_IMAP_PORT` | `mail.tebonsma.no`, `993` | Where mail is read (TLS from the start) |
 | `MAIL_SMTP_HOST`, `MAIL_SMTP_PORT` | `mail.tebonsma.no`, `465` | Where mail is sent |
