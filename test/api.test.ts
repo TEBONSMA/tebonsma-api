@@ -1215,6 +1215,15 @@ describe('the vedtekter', () => {
     assert.equal(res.headers.get('content-type'), 'application/pdf')
     assert.equal(Buffer.from(await res.arrayBuffer()).subarray(0, 5).toString(), '%PDF-')
 
+    // A link for the browser to open without the login, for an hour
+    assert.equal((await call('GET', '/vedtekter/pdf/lenke', null)).status, 401)
+    const { url } = (await call('GET', '/vedtekter/pdf/lenke', 'kari')).data
+    const opened = await fetch(API + url)
+    assert.equal(opened.status, 200)
+    assert.match(opened.headers.get('content-disposition') ?? '', /^inline/)
+    assert.match((await fetch(`${API + url}&last-ned=1`)).headers.get('content-disposition') ?? '', /^attachment/)
+    assert.equal((await fetch(`${API + url}x`)).status, 401, 'a signature changed by a letter')
+
     // A rerun of the same build replaces it
     await publish('mock', { ...good, dokument: JSON.stringify({ ...document, versjon: '0.1.8' }) })
     assert.equal((await call('GET', '/vedtekter', 'kari')).data.versjon, '0.1.8')

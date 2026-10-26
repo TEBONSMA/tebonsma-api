@@ -434,7 +434,8 @@ a JSON version of them on every change and publishes both here. Only members can
 | Method | Path | What |
 |---|---|---|
 | GET | `/vedtekter` | The vedtekter in force: the document as built (`tittel`, `vedtatt`, `versjon`, `dato`, `paragrafer` with number, title, text as HTML and as written, `fotnoter`, `kilder`), with `commit` and `publisert` |
-| GET | `/vedtekter/pdf` | The same as PDF |
+| GET | `/vedtekter/pdf` | The same as PDF, for members or with a link from `/vedtekter/pdf/lenke`. `last-ned=1` downloads it instead of showing it |
+| GET | `/vedtekter/pdf/lenke` | A link to the PDF that works without the login for an hour, so the browser opens it like any other PDF: `{ url, utloper }` |
 | PUT | `/vedtekter` | Publish a build, from the vedtekter repo's workflow with `Authorization: Bearer <VEDTEKTER_PUBLISH_KEY>`: multipart `commit`, `dokument` (the JSON) and `pdf`. Every version is kept; a rerun of the same commit replaces the newest |
 
 ## Requirements
