@@ -457,7 +457,34 @@ decided (`vedtatt`, `forkastet`). Two drafts are made the first time: the additi
 | POST | `/vedtekter/forslag/:number/send-inn`, `/trekk` | Send a draft in, or withdraw a proposal |
 | POST | `/vedtekter/forslag/:number/status` | What the årsmøte decided (protocol group): `{ status: 'vedtatt' \| 'forkastet' \| 'innsendt' }` |
 | POST | `/vedtekter/forslag/:number/kommentarer` | Comment on it: `{ body }` |
-| PUT | `/vedtekter/arsmote` | Set or move the next årsmøte (protocol group): `{ title, startsAt }` |
+| PUT | `/vedtekter/arsmote` | Set or move the next årsmøte (protocol group): `{ title, startsAt }`. It stays planned until started, also when the time has passed; once started its time stays, as the deadlines follow from it |
+
+At the årsmøte members check in and vote on their phones, and the protocol group adds what was
+counted by hand in the room. The agenda (`saker`) holds the proposals, those to the same
+paragraphs as one case, and other cases the protocol group adds (`punkt`), in the order it puts
+them. In a case, a proposal sent in after the deadline is first taken up or not by 3/4 of those
+present (`opptak`, § 3; one not taken up goes on to the next årsmøte), an amendment is voted
+against its proposal and competing proposals against each other (`kontra`, the most votes), and
+the one left against the vedtekter as they are (`endelig`, 2/3 of the votes cast, § 3.3). A tie
+for the most votes leaves the vote `likt` until the protocol group has it voted on again
+(`gjenvalg`, maybe without the options with the fewest votes) or puts in the lot drawn (§ 3). Anything else is put to a vote with its own question and options (`fri`). One vote is
+open at a time; a member can change their vote until it closes, and only the protocol group sees
+the count before that. Afterwards the vedtekter repo fetches what was adopted and writes it in.
+
+| Method | Path | What |
+|---|---|---|
+| GET | `/vedtekter/arsmote/live` | The årsmøte going on or planned, or else the last: `arsmote` (with `state`), `canManage`, `present`, `attendees`, `voteringer` (with `options`, `mine`, `counts` for each option and blank, `result`, `byLot`, `present`, and the changes in full while open) and `saker` in order (with `next`, `current`, `done`, and `opptak` for each proposal) |
+| POST | `/vedtekter/arsmote/start`, `/avslutt` | Start or end it (protocol group) |
+| POST | `/vedtekter/arsmote/oppmote` | Check in, while it goes on |
+| POST, DELETE | `/vedtekter/arsmote/oppmote/:memberId` | Check someone in or out (protocol group) |
+| POST, DELETE | `/vedtekter/arsmote/saker`, `/saker/:id` | Add another case to the agenda, `{ title }`, or take it off (protocol group) |
+| PUT | `/vedtekter/arsmote/saksliste` | The order of the cases (protocol group): `{ order: ['punkt:<id>', 'forslag:3', …] }`; any proposal in a case places it |
+| POST | `/vedtekter/voteringer` | Open a vote (protocol group): `{ a, b }` for forslag a against b, or against the vedtekter when `b` is null; `{ a, opptak: true }`; or `{ title, options, rule: 'flertall' \| 'to-tredjedeler', sak? }` |
+| POST | `/vedtekter/voteringer/:id/stem` | Vote, checked in: `{ choice }`, the option's index or `'blank'` |
+| POST | `/vedtekter/voteringer/:id/lukk` | Close it with the hand count (protocol group): `{ hand: { options: [n, …], blank } }` |
+| POST | `/vedtekter/voteringer/:id/loddtrekning` | After a tie (protocol group): `{ option }`, the lot drawn in the room, or `'tilfeldig'` to draw here |
+| POST | `/vedtekter/voteringer/:id/gjenvalg` | After a tie (protocol group): `{ keep: [i, …] }`, the options to vote on again |
+| GET | `/vedtekter/arsmote/vedtatt` | What the årsmøte going on or the last one adopted, for the vedtekter repo (with `VEDTEKTER_PUBLISH_KEY`) or the protocol group: `{ arsmote, vedtatt, forslag: [{ number, title, changes }] }` in the order adopted |
 
 ## Requirements
 
@@ -487,7 +514,7 @@ decided (`vedtatt`, `forkastet`). Two drafts are made the first time: the additi
 | `CLAUDE_MODEL` | `claude-opus-5-5` | The model the bot asks |
 | `CLAUDE_MONTHLY_USD` | `20` | What the bot may spend with Claude in a calendar month, by its own count |
 | `CLAUDE_MIN_OPEN_SECONDS` | `3600` | How long a market Claude makes must stay open at least. Shorter lets you try it out |
-| `PROTOCOL_GROUP` | `protokollforer` | Group whose members run the proposals to change the vedtekter and the årsmøte, like the admins |
+| `PROTOCOL_GROUP` | `protokollforer` | Group whose members run the proposals to change the vedtekter and the årsmøte, like the admins. Read from LLDAP every 15 seconds, so a change there counts during the årsmøte without logging in again |
 | `VEDTEKTER_PUBLISH_KEY` | none (`mock` in `npm run dev:mock`) | The key the vedtekter repo publishes its builds with, a long random string kept as a secret there too. Without it publishing is off |
 | `MAIL_IMAP_HOST`, `MAIL_IMAP_PORT` | `mail.tebonsma.no`, `993` | Where mail is read (TLS from the start) |
 | `MAIL_SMTP_HOST`, `MAIL_SMTP_PORT` | `mail.tebonsma.no`, `465` | Where mail is sent |
