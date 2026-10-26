@@ -70,7 +70,7 @@ type Status = 'utkast' | 'innsendt' | 'trukket' | 'vedtatt' | 'forkastet'
 
 // --- The vedtekter as published
 
-interface Paragraph {
+export interface Paragraph {
   id: string
   nummer: string
   tittel: string
@@ -78,13 +78,13 @@ interface Paragraph {
   barn: Paragraph[]
 }
 
-interface Place {
+export interface Place {
   paragraph: Paragraph
   parent: Paragraph | null
 }
 
 // Every paragraph in force by id, with the one it is under
-function paragraphs() {
+export function paragraphs() {
   const version = currentVersion() as Record<string, unknown> | null
   const places = new Map<string, Place>()
   const walk = (list: Paragraph[], parent: Paragraph | null) => {
@@ -185,7 +185,7 @@ function checkComplete(changes: Change[], places: Map<string, Place>) {
 
 // --- Rows
 
-interface ForslagRow {
+export interface ForslagRow {
   id: string
   number: number
   parent_id: string | null
@@ -271,7 +271,7 @@ export const arsmoteFor = (row: ForslagRow, all: ReturnType<typeof arsmoter>) =>
 
 // --- Reading
 
-async function summaries(rows: ForslagRow[]) {
+export async function summaries(rows: ForslagRow[]) {
   const members = await getMembers(rows.map(row => row.created_by))
   const all = arsmoter()
   const counts = (sql: string) =>
