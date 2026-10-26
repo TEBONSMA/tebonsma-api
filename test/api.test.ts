@@ -1125,4 +1125,25 @@ describe('The Tebonsma Times and Tebonsma Tidsskrift', () => {
     assert.ok(body.includes(`<figure data-size="small"><img src="${saved.data.url}" alt="x" /><figcaption>Petter på <em>pulebordet</em></figcaption></figure>`), body)
     assert.ok(body.includes(`<figure><img src="${saved.data.url}" /></figure>`), body) // an unknown size is dropped
   })
+
+  it('keeps graphs and videos from other sites in a sandbox, without their scripts', async () => {
+    const datawrapper =
+      '<iframe title="Pils per hode" id="datawrapper-chart-abc" src="https://datawrapper.dwcdn.net/abc/1/" scrolling="no" frameborder="0" style="width: 0; min-width: 100% !important; border: none;" height="400" data-external="1" onload="alert(1)"></iframe><script>window.addEventListener("message", () => {})</script>'
+    const youtube = '<iframe width="560" height="315" src="https://www.youtube.com/embed/x" allow="camera; autoplay" allowfullscreen></iframe>'
+    const refused =
+      '<iframe src="http://example.com/"></iframe><iframe src="https://times.tebonsma.no/"></iframe><iframe src="javascript:alert(1)"></iframe><iframe srcdoc="<script>alert(1)</script>"></iframe>'
+    const made = await call('POST', '/press/tidsskrift/desk', 'eirik', article('Med graf', { body: `<p>Tekst</p>${datawrapper}${youtube}${refused}` }))
+    assert.equal(made.status, 201, JSON.stringify(made.data))
+    const body = made.data.body as string
+    const frames = body.match(/<iframe[^>]*>/g) ?? []
+    assert.equal(frames.length, 2, body)
+    for (const frame of frames) {
+      assert.ok(frame.includes('sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-forms allow-presentation"'), frame)
+      assert.ok(frame.includes('allow="fullscreen; encrypted-media; picture-in-picture; clipboard-write"'), frame)
+    }
+    assert.ok(frames[0].includes('src="https://datawrapper.dwcdn.net/abc/1/"') && frames[0].includes('title="Pils per hode"') && frames[0].includes('height="400"'), frames[0])
+    assert.ok(!frames[0].includes('style'), frames[0])
+    assert.ok(frames[1].includes('width="560"') && /style="aspect-ratio:\s*560 \/ 315"/.test(frames[1]), frames[1])
+    assert.ok(!/<script|alert|onload|srcdoc|example\.com|tebonsma\.no|camera|frameborder/.test(body), body)
+  })
 })

@@ -118,13 +118,38 @@ const OWN_IMAGE = /^(?:https?:\/\/[^/]+)?\/press\/images\/([0-9a-f-]{36})$/
 
 const FIGURE_SIZES = new Set(['small', 'medium', 'full'])
 
+// Graphs, videos and maps from other sites (Datawrapper, YouTube, …) are their own <iframe>: from
+// https, never from our own sites, and in a sandbox that keeps them from taking the page elsewhere.
+// The scripts in their embed code are left out; the sites do Datawrapper's resizing themselves.
+const EMBED_SANDBOX = 'allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-forms allow-presentation'
+
+function embedAllowed(src: string | undefined) {
+  try {
+    const url = new URL(src ?? '')
+    return url.protocol === 'https:' && !/(^|\.)tebonsma\.no$/.test(url.hostname)
+  } catch {
+    return false
+  }
+}
+
+const embedSize = (value: string | undefined) => {
+  const size = Number(value)
+  return Number.isInteger(size) && size >= 50 && size <= 4000 ? size : null
+}
+
 export function cleanBody(html: string) {
   return sanitizeHtml(html, {
-    allowedTags: ['h2', 'h3', 'p', 'br', 'strong', 'b', 'em', 'i', 'u', 's', 'a', 'blockquote', 'ul', 'ol', 'li', 'hr', 'figure', 'img', 'figcaption', 'code'],
+    allowedTags: ['h2', 'h3', 'p', 'br', 'strong', 'b', 'em', 'i', 'u', 's', 'a', 'blockquote', 'ul', 'ol', 'li', 'hr', 'figure', 'img', 'figcaption', 'code', 'iframe'],
     // A picture in the text has a size (small beside the text, medium, full width) and a caption
-    allowedAttributes: { a: ['href', 'target', 'rel'], img: ['src', 'alt'], figure: ['data-size'] },
+    allowedAttributes: {
+      a: ['href', 'target', 'rel'],
+      img: ['src', 'alt'],
+      figure: ['data-size'],
+      iframe: ['src', 'title', 'width', 'height', 'style', 'sandbox', 'allow', 'loading', 'referrerpolicy'],
+    },
+    allowedStyles: { iframe: { 'aspect-ratio': [/^\d+ \/ \d+$/] } },
     allowedSchemes: ['http', 'https', 'mailto'],
-    allowedSchemesByTag: { img: ['http', 'https'] },
+    allowedSchemesByTag: { img: ['http', 'https'], iframe: ['https'] },
     allowProtocolRelative: false,
     // Links open in a new tab, whatever the input said
     transformTags: {
@@ -134,8 +159,25 @@ export function cleanBody(html: string) {
         const kept: Record<string, string> = FIGURE_SIZES.has(size) ? { 'data-size': size } : {}
         return { tagName, attribs: kept }
       },
+      // A video keeps its shape at any width; a graph keeps its height until it says otherwise
+      iframe: (tagName, attribs) => {
+        const width = embedSize(attribs.width)
+        const height = embedSize(attribs.height)
+        const kept: Record<string, string> = {
+          src: attribs.src ?? '',
+          sandbox: EMBED_SANDBOX,
+          allow: 'fullscreen; encrypted-media; picture-in-picture; clipboard-write',
+          loading: 'lazy',
+          referrerpolicy: 'strict-origin-when-cross-origin',
+        }
+        if (attribs.title?.trim()) kept.title = attribs.title.trim().slice(0, 200)
+        if (height) kept.height = String(height)
+        if (width && height) Object.assign(kept, { width: String(width), style: `aspect-ratio: ${width} / ${height}` })
+        return { tagName, attribs: kept }
+      },
     },
-    exclusiveFilter: frame => frame.tag === 'img' && !OWN_IMAGE.test(frame.attribs.src ?? ''),
+    exclusiveFilter: frame =>
+      (frame.tag === 'img' && !OWN_IMAGE.test(frame.attribs.src ?? '')) || (frame.tag === 'iframe' && !embedAllowed(frame.attribs.src)),
   }).replace(/src="(?:https?:\/\/[^/"]+)?\/press\/images\//g, 'src="/press/images/')
 }
 
