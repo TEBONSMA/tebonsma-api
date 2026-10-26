@@ -239,8 +239,10 @@ const late = (row: ForslagRow, meetingId: string) => {
   return !row.parent_id && !!meeting && !!row.submitted_at && row.submitted_at > meeting.forslagFrist
 }
 
-// For a late proposal: still to be decided, taken up, or not (then it goes on to the next årsmøte)
+// For a late proposal: still to be decided, taken up, or not (then it goes on to the next årsmøte).
+// An amendment goes with its proposal: left out if that is.
 function opptakOf(row: ForslagRow, meetingId: string): 'kreves' | 'tatt-opp' | 'ikke-tatt-opp' | null {
+  if (row.parent_id) return opptakOf(rowById(row.parent_id), meetingId) === 'ikke-tatt-opp' ? 'ikke-tatt-opp' : null
   if (!late(row, meetingId)) return null
   const vote = db
     .prepare("SELECT result FROM vedtekter_voteringer WHERE arsmote_id = ? AND kind = 'opptak' AND forslag_a = ? AND status = 'lukket' ORDER BY closed_at DESC")

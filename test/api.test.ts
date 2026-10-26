@@ -1518,6 +1518,7 @@ describe('the vedtekter', () => {
       assert.equal(opened.status, 201, JSON.stringify(opened.data))
       return opened.data.voteringer.at(-1)
     }
+    const withLate1 = (await call('POST', '/vedtekter/forslag', 'dev', { title: 'Om dem', reason: '', parent: late1, submit: true, changes: [{ type: 'endre', target: 'foreningen', title: 'Foreningen', text: 'Om dem.' }] })).data
     const notEnough = await takeUp(late1)
     assert.equal(notEnough.title, `Skal forslag ${late1} tas opp?`)
     assert.deepEqual(notEnough.options, ['Ja', 'Nei'])
@@ -1529,8 +1530,10 @@ describe('the vedtekter', () => {
     assert.equal(left.voteringer.at(-1).result, 1, '2 of 3 present is less than 3/4')
     assert.equal(left.saker[0].forslag[0].opptak, 'ikke-tatt-opp')
     assert.equal(left.saker[0].forslag[0].status, 'innsendt', 'it goes on to the next årsmøte')
+    assert.equal(left.saker[0].forslag[1].opptak, 'ikke-tatt-opp', 'its amendment goes with it')
     assert.equal(left.saker[0].done, true)
     assert.equal((await call('POST', '/vedtekter/voteringer', 'eirik', { a: late1, b: null })).status, 400)
+    assert.equal((await call('POST', '/vedtekter/voteringer', 'eirik', { a: withLate1.number, b: null })).status, 400)
 
     const enough = await takeUp(late2)
     for (const user of ['kari', 'ola', 'dev']) await vote(user, enough.id, 0)
