@@ -13,12 +13,17 @@ export const vedtekterRoutes = new Hono<Env>()
 const sameKey = (given: string, key: string) =>
   given.length === key.length && timingSafeEqual(Buffer.from(given), Buffer.from(key))
 
+// The request comes from the vedtekter repo
+export function hasPublishKey(c: Context) {
+  const key = config.vedtekter.publishKey
+  const given = (c.req.header('Authorization') ?? '').replace(/^Bearer /, '')
+  return !!key && sameKey(given, key)
+}
+
 // multipart: commit, dokument (the JSON), pdf
 vedtekterRoutes.put('/vedtekter', bodyLimit({ maxSize: 8 * 1024 * 1024 }), async c => {
-  const key = config.vedtekter.publishKey
-  if (!key) throw new HTTPException(404, { message: 'Finnes ikke' })
-  const given = (c.req.header('Authorization') ?? '').replace(/^Bearer /, '')
-  if (!sameKey(given, key)) throw new HTTPException(401, { message: 'Feil nøkkel' })
+  if (!config.vedtekter.publishKey) throw new HTTPException(404, { message: 'Finnes ikke' })
+  if (!hasPublishKey(c)) throw new HTTPException(401, { message: 'Feil nøkkel' })
   const { commit, dokument, pdf } = await c.req.parseBody()
   if (typeof commit !== 'string' || !(dokument instanceof File) || !(pdf instanceof File)) {
     throw new HTTPException(400, { message: 'Trenger commit, dokument og pdf' })
