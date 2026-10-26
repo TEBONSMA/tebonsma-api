@@ -274,8 +274,8 @@ async function summaries(rows: ForslagRow[]) {
       createdAt: row.created_at,
       submittedAt: row.submitted_at,
       arsmote: meeting?.id ?? null,
-      // Sent in after the deadline for the årsmøte it is for
-      late: !!(row.submitted_at && meeting && row.submitted_at > meeting.forslagFrist),
+      // Sent in after the deadline for the årsmøte it is for; an amendment can be made in the meeting
+      late: !!(!row.parent_id && row.submitted_at && meeting && row.submitted_at > meeting.forslagFrist),
       // Which paragraphs, in words: "Endrer § 4.2.3"
       changes: changes.map(change => describe(change, places)),
       amendments: amendments.get(row.id) ?? 0,
