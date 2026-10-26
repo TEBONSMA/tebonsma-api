@@ -46,4 +46,35 @@ function retireFootball() {
   })
 }
 
+// Claude's markets from before there were groups, in the news group, and the group each belongs
+// in. Those made by hand stay in the news group.
+const FROM_THE_NEWS: [string, BotGroup['id']][] = [
+  ['fd35bb56-b21d-49cd-8524-fe0ec4a202db', 'sport'], // HamKam – Rosenborg
+  ['d81143a5-3ca5-4a07-a3de-3a0c505f3c8f', 'sport'], // Rosenborg videre i NM
+  ['b2af7c72-77d9-4937-bd4f-affc8ef54a36', 'sport'], // Bodø/Glimt – Lille
+  ['78999983-4d18-43a3-b5a1-9d477114e58f', 'sport'], // Gullkampen Bodø/Glimt – Viking
+  ['684b1954-072e-47ea-a838-73913522572e', 'sport'], // Formel 1 i Austin
+  ['27765697-4f20-49e6-86a2-ec5d356abc11', 'sport'], // Antonelli verdensmester
+  ['fd66710e-2e36-4046-bbc8-23723f089cf8', 'sport'], // Ballon d'Or-vinneren
+  ['8bc0d564-ee52-4667-b066-2d3397aac5da', 'sport'], // Haalands plass i Ballon d'Or
+  ['9f209e36-ad8b-4a34-841a-5bc28232c4f3', 'utenriks'], // Mellomvalget i USA
+  ['77bddcd6-2e0a-40ee-bbbe-dd34cb837513', 'okonomi'], // Apples nye produkter
+  ['e393132f-8da5-41b6-ad90-85dd39675383', 'okonomi'], // Navnet på Apples MacBook
+  ['e07ac533-a9dd-4bf4-bf4b-7fdf4e1b3128', 'okonomi'], // KPI for oktober
+  ['609496ea-ff3e-40ec-a640-792acb4c88dc', 'okonomi'], // Nvidias omsetning
+  ['63706485-3da6-4eb0-8bb7-fb6df5b9d8cd', 'trondelag'], // Snø på Voll
+]
+
+// Each of those still in the news group goes to its own. Nothing happens the second time.
+function sortTheNews() {
+  transaction(() => {
+    for (const [id, groupId] of FROM_THE_NEWS) {
+      if (!db.prepare("SELECT 1 FROM bet_markets WHERE id = ? AND group_id = 'nyheter'").get(id)) continue
+      const group = BOT_GROUPS.find(known => known.id === groupId)!
+      db.prepare('UPDATE bet_markets SET group_id = ?, section_id = NULL WHERE id = ?').run(botGroupId(group), id)
+    }
+  })
+}
+
 retireFootball()
+sortTheNews()
