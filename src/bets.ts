@@ -133,7 +133,7 @@ const SELECTION_INDEXES = `
 
 db.exec(`
   -- Collections of markets that aren't about an event, like "Andre spill" or one a bot fills.
-  -- The id is in the address (/gruppe/landslaget).
+  -- The id is in the address (/gruppe/sport).
   CREATE TABLE IF NOT EXISTS bet_groups (
     id         TEXT PRIMARY KEY,
     title      TEXT NOT NULL,
