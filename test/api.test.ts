@@ -1082,7 +1082,8 @@ describe('The Tebonsma Times and Tebonsma Tidsskrift', () => {
     await call('POST', `/press/times/desk/${made.id}/publish`, 'petter', { at: new Date(Date.now() + 3_600_000).toISOString() })
     const now = await call('POST', `/press/times/desk/${made.id}/publish`, 'petter')
     assert.equal(now.data.scheduled, false)
-    assert.ok(Date.parse(now.data.publishedAt) <= Date.now())
+    // Now, not in an hour; the server's clock may run a few milliseconds ahead of the test's
+    assert.ok(Date.parse(now.data.publishedAt) < Date.now() + 60_000, now.data.publishedAt)
     const later = (await call('POST', '/press/times/desk', 'petter', article('Avbrutt planlegging'))).data
     await call('POST', `/press/times/desk/${later.id}/publish`, 'petter', { at: new Date(Date.now() + 3_600_000).toISOString() })
     const back = await call('POST', `/press/times/desk/${later.id}/unpublish`, 'petter')
@@ -1218,4 +1219,5 @@ describe('the vedtekter', () => {
     await publish('mock', { ...good, dokument: JSON.stringify({ ...document, versjon: '0.1.8' }) })
     assert.equal((await call('GET', '/vedtekter', 'kari')).data.versjon, '0.1.8')
   })
+
 })
