@@ -81,6 +81,10 @@ export const config = {
     tidsskriftGroup: process.env.TIDSSKRIFT_GROUP ?? 'tidsskrift_redaksjon',
   },
   claude: claudeConfig(),
+  // The vedtekter repo publishes its builds with this key; without it publishing is off
+  vedtekter: {
+    publishKey: process.env.VEDTEKTER_PUBLISH_KEY || null,
+  },
   lldap: {
     url: (process.env.LLDAP_URL ?? 'http://lldap:17170').replace(/\/$/, ''),
     username: required('LLDAP_USERNAME'),
