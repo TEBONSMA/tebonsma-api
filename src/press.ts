@@ -223,7 +223,7 @@ interface AuthorOut {
   alias: string | null
 }
 
-const storedAuthors = (raw: string) =>
+export const storedAuthors = (raw: string) =>
   (JSON.parse(raw) as (string | StoredAuthor)[]).map(author => (typeof author === 'string' ? { username: author } : author))
 
 async function toArticles(rows: ArticleRow[], withBody: boolean) {

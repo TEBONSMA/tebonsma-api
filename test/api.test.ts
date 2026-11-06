@@ -121,6 +121,7 @@ before(async () => {
       SITE_URL: ORIGIN,
       BOTS: 'off',
       NEW_MARKETS_CHECK_SECONDS: '1',
+      NEW_ARTICLES_CHECK_SECONDS: '1',
       // Fyllekjøring's multiplier climbs 50 times as fast: 250x in about a second
       CRASH_SPEED: '50',
       // The bot's Claude is the stand-in above, and its markets may close within seconds
@@ -857,6 +858,38 @@ describe('push notifications', () => {
     assert.equal(mentioning(forDev(), 'Vinner Kari'), 1, 'each market is news once')
     assert.equal(mentioning(forDev(), 'over 30'), 1)
     assert.equal(mentioning(news('kari-bet').slice(before.kari), 'Vinner Kari'), 0)
+  })
+
+  it('tells the readers of a paper about new articles, also those set for later once they are out', async () => {
+    const news = (name: string) => pushedTo(name).filter(push => push.tag === 'new-articles')
+    for (const [user, site] of [['dev', 'times'], ['kari', 'tidsskrift'], ['petter', 'times']]) {
+      assert.equal((await call('POST', '/push/subscriptions', user, { site, subscription: subscription(`${user}-${site}`) })).status, 204)
+    }
+    // Let a check go by first, so the clock has started
+    await sleep(1200)
+    const publish = async (title: string, at?: string) => {
+      const made = await call('POST', '/press/times/desk', 'petter', { title, section: 'Innenriks', lead: '', body: '<p>Tekst</p>', visibility: 'members' })
+      assert.equal(made.status, 201, JSON.stringify(made.data))
+      const out = await call('POST', `/press/times/desk/${made.data.id}/publish`, 'petter', at ? { at } : {})
+      assert.equal(out.status, 200, JSON.stringify(out.data))
+      return out.data
+    }
+    const now = await publish('Pulebordet flyttes til Palanga')
+    await publish('Gammel sak fra arkivet', '2021-12-20T18:00:00.000Z')
+    const later = await publish('Kommer om litt', new Date(Date.now() + 2500).toISOString())
+
+    const [first] = await until(async () => news('dev-times'), list => list.length > 0, 5)
+    assert.equal(first.title, 'Ny sak i The Tebonsma Times')
+    assert.equal(first.body, 'Pulebordet flyttes til Palanga')
+    assert.equal(first.url, `/sak/${now.slug}`)
+    const [second] = await until(async () => news('dev-times').slice(1), list => list.length > 0, 8)
+    assert.equal(second.body, 'Kommer om litt', 'once its time had come')
+    assert.equal(second.url, `/sak/${later.slug}`)
+
+    await sleep(1500)
+    assert.equal(news('dev-times').length, 2, 'each article once, and never the backdated one')
+    assert.equal(news('petter-times').length, 0, 'not to the one who published it')
+    assert.equal(news('kari-tidsskrift').length, 0, 'the journal hears nothing about the newspaper')
   })
 
   it('stops when the member turns it off', async () => {

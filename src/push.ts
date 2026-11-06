@@ -1,13 +1,13 @@
 import webpush from 'web-push'
 import { HTTPException } from 'hono/http-exception'
 import { config } from './config.ts'
-import { db } from './db.ts'
+import { db, transaction } from './db.ts'
 
 // Push notifications to members' phones and computers (Web Push). Each site asks the browser for
 // a subscription and hands it in here; the API then sends through the browser maker's push
 // service (Google, Apple, Mozilla, Microsoft), end-to-end encrypted to that one browser.
 
-export const PUSH_SITES = ['teb', 'tebbet'] as const
+export const PUSH_SITES = ['teb', 'tebbet', 'times', 'tidsskrift'] as const
 export type PushSite = (typeof PUSH_SITES)[number]
 
 // What the site's service worker shows: url is a path on that site, opened when it is tapped.
@@ -26,17 +26,32 @@ export interface PushSubscription {
 
 type Sender = (subscription: PushSubscription, payload: string) => Promise<unknown>
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS push_subscriptions (
+const SUBSCRIPTION_COLUMNS = `
     endpoint   TEXT PRIMARY KEY,
     username   TEXT NOT NULL,
-    site       TEXT NOT NULL CHECK (site IN ('teb', 'tebbet')),
+    site       TEXT NOT NULL CHECK (site IN (${PUSH_SITES.map(site => `'${site}'`).join(', ')})),
     p256dh     TEXT NOT NULL,
     auth       TEXT NOT NULL,
     created_at TEXT NOT NULL
-  );
-  CREATE INDEX IF NOT EXISTS push_subscriptions_member ON push_subscriptions (username, site);
-`)
+`
+const SUBSCRIPTION_INDEX = 'CREATE INDEX IF NOT EXISTS push_subscriptions_member ON push_subscriptions (username, site);'
+
+db.exec(`CREATE TABLE IF NOT EXISTS push_subscriptions (${SUBSCRIPTION_COLUMNS}); ${SUBSCRIPTION_INDEX}`)
+
+// The papers came after the first subscriptions, and the table only took the sites there were
+// then, so it is made again with the same rows
+const { sql } = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'push_subscriptions'").get() as { sql: string }
+if (!PUSH_SITES.every(site => sql.includes(`'${site}'`))) {
+  transaction(() =>
+    db.exec(`
+      CREATE TABLE push_subscriptions_new (${SUBSCRIPTION_COLUMNS});
+      INSERT INTO push_subscriptions_new SELECT endpoint, username, site, p256dh, auth, created_at FROM push_subscriptions;
+      DROP TABLE push_subscriptions;
+      ALTER TABLE push_subscriptions_new RENAME TO push_subscriptions;
+      ${SUBSCRIPTION_INDEX}
+    `),
+  )
+}
 
 // The API posts to whatever endpoint a browser gave, so only the push services themselves are
 // accepted, never an address inside the network
