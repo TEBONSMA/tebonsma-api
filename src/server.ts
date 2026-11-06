@@ -16,6 +16,7 @@ import { imapBackend } from './mail/imapBackend.ts'
 import { startScheduler } from './mail/scheduled.ts'
 import { memberRoutes } from './memberRoutes.ts'
 import { announceLaunch } from './gifts.ts'
+import { startNewArticlesCheck } from './newArticles.ts'
 import { startNewMarketsCheck } from './newMarkets.ts'
 import { settleLandedRounds } from './rounds.ts'
 import { pushRoutes } from './pushRoutes.ts'
@@ -193,6 +194,9 @@ if (!trial) {
 
 // Every hour, a push to TebBet's members about markets that have opened since
 if (!trial) startNewMarketsCheck()
+
+// Every five minutes, a push to the papers' readers about articles that have come out since
+if (!trial) startNewArticlesCheck()
 
 // Once, when Sponsorjakten and Fyllekjøring come out: a push about them and the rounds on the house
 if (!trial) announceLaunch()
