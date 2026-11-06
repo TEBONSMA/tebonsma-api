@@ -402,7 +402,7 @@ patched by hand, and the LDAP password login stays, so phone mail apps keep work
 
 ### Push notifications
 
-Both sites can be installed on a phone or computer (as a PWA) and turn on push notifications
+The sites (tebonsma.no, TebBet and the two papers) can be installed on a phone or computer (as a PWA) and turn on push notifications
 per browser. The site subscribes through the browser's push service and hands the subscription
 in here; the API then pushes, end-to-end encrypted (Web Push with VAPID), through Google,
 Apple, Mozilla or Microsoft. Tapping a notification opens `url` on the site that subscribed.
@@ -410,7 +410,7 @@ Apple, Mozilla or Microsoft. Tapping a notification opens `url` on the site that
 | Method | Path | What |
 |---|---|---|
 | GET | `/push/key` | The API's public VAPID key, which the browser subscribes with. `null` while push is off. No login needed |
-| POST | `/push/subscriptions` | Turn notifications on for this browser: `{ site: 'teb' \| 'tebbet', subscription }`, where `subscription` is the browser's `PushSubscription` as JSON. A browser already handed in moves to the member asking |
+| POST | `/push/subscriptions` | Turn notifications on for this browser: `{ site: 'teb' \| 'tebbet' \| 'times' \| 'tidsskrift', subscription }`, where `subscription` is the browser's `PushSubscription` as JSON. A browser already handed in moves to the member asking |
 | DELETE | `/push/subscriptions` | Turn them off: `{ endpoint }` |
 
 What is pushed, after the change is saved:
