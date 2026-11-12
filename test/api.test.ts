@@ -128,6 +128,8 @@ before(async () => {
       ANTHROPIC_API_KEY: 'test-key',
       ANTHROPIC_BASE_URL: `http://127.0.0.1:${CLAUDE_PORT}`,
       CLAUDE_MIN_OPEN_SECONDS: '1',
+      // Time in TebBet counts 100 times as fast, so a heartbeat counts for its full 30 seconds at once
+      PLAY_TIME_SPEED: '100',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
@@ -321,7 +323,7 @@ describe('organizers', () => {
     const names = (await call('GET', '/members', 'dev')).data.map((m: any) => m.name)
     assert.ok(names.includes('Kari Nordmann') && names.includes('Ola Nordmann'))
     assert.ok(!names.includes('Dev Bruker'), 'the caller is left out')
-    assert.ok(!names.includes('Admin Bruker'), 'accounts outside the member group are left out')
+    assert.ok(!names.includes('Tebonsma Hovedstyre'), 'accounts outside the member group are left out')
   })
 
   it('may edit an event they were given, but not who organizes it', async () => {
@@ -1589,5 +1591,135 @@ describe('the vedtekter', () => {
     assert.equal(withAmendment.forslag[1].opptak, null)
     const afterwards = (await call('POST', '/vedtekter/arsmote/avslutt', 'eirik')).data
     assert.equal(afterwards.saker[0].forslag[0].opptak, 'ikke-tatt-opp', 'still on the list of the årsmøte that left it out')
+  })
+})
+
+// At the end, since the limits and breaks set here stay for the rest of the run
+describe('Spillepause', () => {
+  const limits = async (user: string) => (await call('GET', '/bet/limits', user)).data
+  const setLimits = (user: string, body: unknown) => call('PUT', '/bet/limits', user, body)
+  const spin = (user: string, stake: number, trial = false) => call('POST', '/bet/casino/sponsorjakten/spin', user, { stake, trial })
+
+  it('asks a member who has played a lot today whether they want a limit, until they say not now', async () => {
+    const before = await limits('dev')
+    assert.equal(before.stake.day.limit, null)
+    assert.equal(before.time.week.limit, null)
+    if (before.stake.day.used < 300) {
+      const played = await spin('dev', 300 - before.stake.day.used)
+      assert.equal(played.status, 200, JSON.stringify(played.data))
+    }
+    const { play } = (await call('GET', '/bet/me', 'dev')).data
+    assert.equal(play.blocked, null)
+    assert.ok(play.nudge.stake >= 300, JSON.stringify(play))
+    assert.equal((await call('POST', '/bet/limits/nudge', 'dev')).status, 200)
+    assert.equal((await call('GET', '/bet/me', 'dev')).data.play.nudge, null, 'not again today')
+  })
+
+  it('holds a stricter limit at once and a looser one only after a day', async () => {
+    const used = (await limits('dev')).stake.day.used
+    const set = await setLimits('dev', { stake: { day: used + 50 } })
+    assert.equal(set.status, 200, JSON.stringify(set.data))
+    assert.equal(set.data.stake.day.limit, used + 50)
+    assert.equal((await spin('dev', 40)).status, 200)
+    const over = await spin('dev', 20)
+    assert.equal(over.status, 423)
+    assert.match(over.data.error, /Grensen din er \d+ ₮ i innsats per dag, og du har 10 ₮ igjen til /)
+    assert.equal((await spin('dev', 20, true)).status, 200, 'a free try is no stake')
+
+    const raised = (await setLimits('dev', { stake: { day: 100_000 } })).data.stake.day
+    assert.equal(raised.limit, used + 50, 'a looser limit waits')
+    assert.equal(raised.pending.amount, 100_000)
+    assert.ok(Date.parse(raised.pending.from) > Date.now() + 23 * 60 * 60 * 1000)
+    assert.equal((await spin('dev', 20)).status, 423)
+    await sleep(20)
+    const again = (await setLimits('dev', { stake: { day: 100_000 } })).data.stake.day
+    assert.equal(again.pending.from, raised.pending.from, 'asking again does not start the wait over')
+
+    const lowered = (await setLimits('dev', { stake: { day: used + 40 } })).data
+    assert.equal(lowered.stake.day.limit, used + 40, 'a stricter one holds at once')
+    assert.equal(lowered.stake.day.pending, null, 'and what was waiting is gone')
+    assert.equal(lowered.blocked.reason, 'stake', 'used up')
+    assert.equal((await spin('dev', 1)).status, 423)
+    assert.equal((await setLimits('dev', { stake: { day: 0 } })).status, 400)
+    assert.equal((await setLimits('dev', { time: { month: 60 } })).status, 400, 'time goes by the day or the week')
+    assert.equal((await setLimits('dev', { stake: JSON.parse('{"__proto__": null}') })).status, 400)
+  })
+
+  it('stops all play when the time limit is reached, but lets a round that has begun end', async () => {
+    assert.equal((await setLimits('kari', { time: { day: 1 } })).status, 200)
+    const drive = await call('POST', '/bet/casino/fyllekjoring/launch', 'kari', { stake: 10 })
+    assert.equal(drive.status, 201, JSON.stringify(drive.data))
+    let blocked = null
+    for (let beat = 0; beat < 3; beat++) {
+      await sleep(400)
+      blocked = (await call('POST', '/bet/play', 'kari')).data.blocked
+    }
+    assert.equal(blocked.reason, 'time', 'two beats of 30 seconds after the first')
+    assert.match(blocked.message, /grensen din på 1 min spilletid per dag/)
+    assert.equal((await call('POST', `/bet/casino/fyllekjoring/${drive.data.flight.id}/takeout`, 'kari')).status, 200, 'the drive ends')
+    assert.equal((await call('POST', '/bet/casino/fyllekjoring/launch', 'kari', { stake: 10 })).status, 423)
+    assert.equal((await call('POST', '/bet/casino/fyllekjoring/try', 'kari')).status, 423, 'free plays stop too')
+    assert.equal((await spin('kari', 10, true)).status, 423)
+    assert.ok((await limits('kari')).time.day.used >= 60)
+    assert.equal((await spin('ola', 10)).status, 200, 'others play on')
+  })
+
+  it('lets a member take a break that cannot be cut short', async () => {
+    const paused = await call('POST', '/bet/limits/pause', 'ola', { length: 'rest-of-day' })
+    assert.equal(paused.status, 200, JSON.stringify(paused.data))
+    assert.equal(paused.data.blocked.reason, 'pause')
+    assert.equal(paused.data.pause, paused.data.stake.day.resetsAt, 'until midnight')
+    const week = (await call('POST', '/bet/limits/pause', 'ola', { length: '7d' })).data.pause
+    assert.ok(Date.parse(week) > Date.now() + 6 * 24 * 60 * 60 * 1000)
+    assert.equal((await call('POST', '/bet/limits/pause', 'ola', { length: '24h' })).data.pause, week, 'a shorter one changes nothing')
+    assert.equal((await call('POST', '/bet/limits/pause', 'ola', { length: 'forever' })).status, 400)
+
+    assert.equal((await spin('ola', 10)).status, 423)
+    assert.equal((await call('POST', '/bet/flaks/underbergen/buy', 'ola')).status, 423)
+    assert.equal((await call('POST', '/bet/flaks/underbergen/try', 'ola')).status, 423)
+    const me = (await call('GET', '/bet/me', 'ola')).data
+    assert.equal(me.play.blocked.reason, 'pause')
+    assert.match(me.play.blocked.message, /^Du har tatt spillepause til /)
+    assert.equal(me.play.nudge, null)
+  })
+
+  it('lets an admin take away the limits and break of a member at once, and tells them', async () => {
+    const kari = (await call('GET', '/members/me', 'kari')).data.member.id
+    const ola = (await call('GET', '/members/me', 'ola')).data.member.id
+    assert.equal((await call('GET', `/bet/members/${kari}/limits`, 'dev')).status, 403, 'only admins')
+    assert.equal((await call('DELETE', `/bet/members/${kari}/limits`, 'dev')).status, 403)
+    assert.equal((await call('GET', `/bet/members/${kari}/limits`, 'admin')).data.time.day.amount, 1)
+
+    const pushesBefore = pushes.length
+    const cleared = await call('DELETE', `/bet/members/${kari}/limits`, 'admin')
+    assert.equal(cleared.status, 200, JSON.stringify(cleared.data))
+    assert.equal(cleared.data.time.day.amount, null)
+    assert.equal(cleared.data.time.day.pending, null)
+    const own = await limits('kari')
+    assert.equal(own.blocked, null, 'kari plays again')
+    assert.equal(own.nudge, null, 'and is not asked about a limit today')
+    assert.equal(own.reset.by, 'Admin Bruker')
+    const drive = await call('POST', '/bet/casino/fyllekjoring/launch', 'kari', { stake: 10 })
+    assert.equal(drive.status, 201, JSON.stringify(drive.data))
+    await call('POST', `/bet/casino/fyllekjoring/${drive.data.flight.id}/takeout`, 'kari')
+    const [told] = await until(async () => pushes.slice(pushesBefore).filter(push => push.endpoint.endsWith('/kari-bet')), list => list.length > 0, 5)
+    assert.equal(told.title, 'Spillepause')
+    assert.equal(told.body, 'Admin Bruker har fjernet grensene og pausen din.')
+
+    assert.equal((await call('DELETE', `/bet/members/${ola}/limits`, 'admin')).data.pause, null, 'the break is over')
+    assert.equal((await spin('ola', 10)).status, 200)
+    assert.equal((await call('DELETE', '/bet/members/finnes-ikke/limits', 'admin')).status, 404)
+  })
+})
+
+describe('TebBet for members only', () => {
+  it('keeps out accounts that can log in but are not in the member group', async () => {
+    const me = await call('GET', '/bet/me', 'styret')
+    assert.equal(me.status, 403)
+    assert.equal(me.data.error, 'BetTeb er bare for medlemmer av TEBONSMA')
+    assert.equal((await call('POST', '/bet/casino/sponsorjakten/spin', 'styret', { stake: 10 })).status, 403)
+    assert.equal((await call('GET', '/members/me', 'styret')).data.coins, null, 'no coins on its page on the main site either')
+    const board = (await call('GET', '/bet/leaderboard', 'dev')).data
+    assert.ok(!board.some((row: any) => row.member.name === 'Tebonsma Hovedstyre'))
   })
 })

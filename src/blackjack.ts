@@ -1,6 +1,7 @@
 import { randomInt, randomUUID } from 'node:crypto'
 import { HTTPException } from 'hono/http-exception'
 import { addCasinoRow, balanceOf } from './bets.ts'
+import { assertCanPlay, assertStakeRoom } from './limits.ts'
 import { db, transaction } from './db.ts'
 import type { Viewer } from './feed.ts'
 import { usernameOf } from './members.ts'
@@ -220,6 +221,7 @@ export function openHand(viewer: Viewer) {
 export function deal(viewer: Viewer, bet: number, trial: boolean) {
   return transaction(() => {
     if (openRow(viewer.username)) throw new HTTPException(409, { message: 'Spill ferdig hånden du har først' })
+    assertCanPlay(viewer.username, trial ? 0 : bet)
     if (!trial && bet > balanceOf(viewer.username)) throw bad('Du har ikke nok TEB-mynter')
     // Free hands that are over aren't kept
     db.prepare("DELETE FROM flaks_hands WHERE username = ? AND trial = 1 AND status = 'done'").run(viewer.username)
@@ -260,6 +262,8 @@ export function act(viewer: Viewer, id: string, action: Action) {
     const hand = state.hands[state.active]
     const pay = (detail: string) => {
       if (row.trial) return
+      // The hand may be played out on a break or past a time limit, but a stake limit still holds
+      assertStakeRoom(viewer.username, hand.bet)
       if (balanceOf(viewer.username) < hand.bet) throw bad('Du har ikke nok TEB-mynter')
       addCasinoRow(viewer.username, -hand.bet, GAME, detail)
     }

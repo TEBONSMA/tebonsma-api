@@ -116,7 +116,14 @@ can get a new closing time.
 
 | Method | Path | Does |
 |---|---|---|
-| GET | `/bet/me` | Own balance, coins in play, the next Monday, and `gifts`: rounds on the house left in Sponsorjakten and Fyllekjøring (`{ left, stake }` per game; every member gets ten at 25 coins in each, for their launch) |
+| GET | `/bet/me` | Own balance, coins in play, the next Monday, and `gifts`: rounds on the house left in Sponsorjakten and Fyllekjøring (`{ left, stake }` per game; every member gets ten at 25 coins in each, for their launch), and `play`: `{ blocked, nudge }` from Spillepause |
+| GET | `/bet/limits` | Spillepause, own: each limit (`stake` by `day`, `week` and `month` in coins, `time` by `day` and `week` in minutes) as `{ limit, pending, used, resetsAt }`, with `used` in coins or seconds; the break (`pause`), `blocked` and `nudge` |
+| PUT | `/bet/limits` | Set limits: `{ stake?: { day?, week?, month? }, time?: { day?, week? } }`, each a whole number or `null` for none. A stricter one holds at once, a looser one after 24 hours (`pending`) |
+| POST | `/bet/limits/pause` | A break, `{ length: 'rest-of-day' \| '24h' \| '7d' \| '30d' }`. It can't be cut short |
+| POST | `/bet/limits/nudge` | Not now, to the question about a limit: not asked again today |
+| GET | `/bet/members/:id/limits` | A member's limits (`{ amount, pending }` by kind and period) and break (`pause`), for admins |
+| DELETE | `/bet/members/:id/limits` | Takes away all of a member's limits and their break at once (admins). The member gets a push, and `/bet/limits` shows `reset: { by, at }` for 30 days |
+| POST | `/bet/play` | The app saying the member is using it, every 30 seconds while it is open, in sight and touched in the last two minutes: `{ blocked }` |
 | GET | `/bet/events` | Coming events and past ones that had markets, with the markets still open or decided the last day, current odds, and `summary` of all of them (`markets`, `decided`, `lastDecidedAt`, `staked`) |
 | GET | `/bet/events/:id` | One event, every market on it and the latest bets |
 | GET | `/bet/groups` | Every group with its markets still open or decided the last day and `summary`, as for events, and `front`: where admins have put events and groups on the front page (`event:<id>`, `group:<id>`) |
@@ -222,6 +229,19 @@ it off, or leaves it to the admins. Every call is counted in dollars (table `cla
 the bot stops for the month at `CLAUDE_MONTHLY_USD`. A question the model declines is run on
 another model instead (server-side fallback). The tests stand in for Claude, so they never
 reach Anthropic.
+
+**Spillepause** (`src/limits.ts`) is each member's own limits on what they stake (coins, on
+slips and in the casino) and how long they play (time in TebBet), by the day, week or month in
+Norway, and breaks they take: for the rest of the day, 24 hours, 7 or 30 days, which can't be cut
+short. A stricter limit holds at once, a looser one or none only after 24 hours. Every stake is
+checked against the limits before it is taken, and a break or a time limit reached stops all
+play, free tries and rounds on the house too, with `423` and when it ends; a round that has
+begun can be played out. The time is counted from the app's heartbeat (`POST /bet/play`): each
+counts for the time since the last one, at most 30 seconds, and nothing after a gap of a minute.
+A member who has set no limits is asked once on a day they have played an hour or staked 300
+coins (`nudge` in `/bet/me`). Only the member and the admins see it. An admin can take away all
+of a member's limits and their break at once, as at a party everyone is at; the member gets a push
+about it, and their page says who did it and when (`reset`).
 
 **Flaks** (`src/flaks.ts`, `src/flaksGames.ts`) are games of pure luck that settle at once:
 scratch cards and roulette. A scratch card's prize is drawn by its odds when it is bought, like
@@ -510,7 +530,7 @@ the count before that. Afterwards the vedtekter repo fetches what was adopted an
 | `PORT` | `8080` | Port to listen on |
 | `DATA_DIR` | `./data` (`/app/data` in Docker) | Folder for the SQLite database |
 | `ADMIN_GROUP` | `lldap_admin` | Group whose members moderate the feed |
-| `MEMBER_GROUP` | `medlemmer` | Group of the members of TEBONSMA, for TebBet's list of members |
+| `MEMBER_GROUP` | `medlemmer` | Group of the members of TEBONSMA. Only they can use TebBet (`403` for other accounts that can log in), and only they are on its list of members and its leaderboard |
 | `BOTS` | on | `off` keeps TebBet's bot from running (it is off in `npm run dev:mock` unless started with `--bots`) |
 | `ANTHROPIC_API_KEY` | none | Key for the Claude API. Without it the bot makes no markets with Claude |
 | `CLAUDE_MODEL` | `claude-opus-5-5` | The model the bot asks |
@@ -530,6 +550,7 @@ the count before that. Afterwards the vedtekter repo fetches what was adopted an
 | `VAPID_SUBJECT` | `https://tebonsma.no` | Where the push services can reach whoever runs the API (an `https:` or `mailto:` address) |
 | `NEW_MARKETS_CHECK_SECONDS` | `3600` | How often TebBet's members hear about new markets. The first look after a fresh start of the database only starts the clock |
 | `NEW_ARTICLES_CHECK_SECONDS` | `300` | How often the papers' readers hear about new articles, which the first look only starts the clock for, as above |
+| `PLAY_TIME_SPEED` | `1` | How much faster time in TebBet counts for Spillepause. Only for the tests |
 | `CRASH_SPEED` | `1` | How much faster Fyllekjøring's multiplier climbs than usual (2x after about 7 s). Only for trying it out and for the tests |
 
 Put the credentials in `.env` (see `.env.example`). It is git-ignored and should never be

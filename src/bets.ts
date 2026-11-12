@@ -3,6 +3,7 @@ import { HTTPException } from 'hono/http-exception'
 import { config } from './config.ts'
 import { afterCommit, db, transaction } from './db.ts'
 import { giftsGiven, giftsOf, giveGifts } from './gifts.ts'
+import { assertCanPlay, playOf } from './limits.ts'
 import { colorOf, ROULETTE_ODDS, spotLabel, wins, type RouletteSpot } from './roulette.ts'
 import type { Viewer } from './feed.ts'
 import { listGroupMembers } from './lldap.ts'
@@ -404,6 +405,8 @@ export async function getAccount(viewer: Viewer) {
     nextAllowance: mondaysBetween(today, dateOf(dayNumber(today) + 7))[0],
     // Rounds on the house left in the casino games
     gifts: giftsOf(viewer.username),
+    // Spillepause: whether the member may play now, and whether to ask them about a limit
+    play: playOf(viewer.username),
   }
 }
 
@@ -1477,6 +1480,7 @@ function targetOf(selection: MarketSelection): Target {
 export function placeSlips(viewer: Viewer, slips: SlipInput[]) {
   return transaction(() => {
     const total = slips.reduce((sum, slip) => sum + slip.stake, 0)
+    assertCanPlay(viewer.username, total)
     if (total > balanceOf(viewer.username)) throw bad('Du har ikke nok TEB-mynter')
 
     const targets = slips.map(slip => {
@@ -1755,9 +1759,12 @@ export function listLedger(viewer: Viewer) {
 
 // Everyone who has played, by what they are worth: coins in hand and coins in play
 export async function getLeaderboard() {
-  const usernames = (db.prepare('SELECT DISTINCT username FROM bet_ledger').all() as { username: string }[]).map(
-    row => row.username,
-  )
+  // Only those who are members now: an account that got in without being one, or someone who has
+  // left, isn't on it
+  const current = new Set(await listGroupMembers(config.memberGroup))
+  const usernames = (db.prepare('SELECT DISTINCT username FROM bet_ledger').all() as { username: string }[])
+    .map(row => row.username)
+    .filter(username => current.has(username))
   // Members who haven't been here for a while are owed their Mondays too
   for (const username of usernames) ensureAccount(username)
 
@@ -1777,6 +1784,7 @@ export async function getLeaderboard() {
   const members = await getMembers(usernames)
 
   const rows = balances
+    .filter(row => current.has(row.username))
     .map(row => {
       const stats = slips.find(s => s.username === row.username)
       const inPlay = stats?.in_play ?? 0

@@ -1,6 +1,7 @@
 import { randomInt, randomUUID } from 'node:crypto'
 import { HTTPException } from 'hono/http-exception'
 import { addCasinoRow, balanceOf } from './bets.ts'
+import { assertCanPlay } from './limits.ts'
 import { db, transaction } from './db.ts'
 import type { Viewer } from './feed.ts'
 import { GAMES, type Field, type ScratchGame } from './flaksGames.ts'
@@ -170,6 +171,7 @@ export function tryTicket(gameId: string) {
 export function buyTicket(viewer: Viewer, gameId: string) {
   const game = gameOf(gameId)
   return transaction(() => {
+    assertCanPlay(viewer.username, game.price)
     if (balanceOf(viewer.username) < game.price) throw bad('Du har ikke nok TEB-mynter')
     const open = db.prepare("SELECT COUNT(*) AS n FROM flaks_tickets WHERE username = ? AND status = 'open'").get(viewer.username) as {
       n: number
@@ -253,6 +255,7 @@ export function tryRoulette(bets: RouletteBet[]) {
 export function spinRoulette(viewer: Viewer, bets: RouletteBet[]) {
   return transaction(() => {
     const { number, results, total, paid } = roll(bets)
+    assertCanPlay(viewer.username, total)
     if (total > balanceOf(viewer.username)) throw bad('Du har ikke nok TEB-mynter')
     addCasinoRow(viewer.username, -total, 'Rulett', `${bets.length} ${bets.length === 1 ? 'innsats' : 'innsatser'}`)
     if (paid > 0) addCasinoRow(viewer.username, paid, 'Rulett', `Kula landet på ${number}`)
