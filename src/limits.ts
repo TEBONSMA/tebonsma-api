@@ -5,7 +5,8 @@ import { db, transaction } from './db.ts'
 // Spillepause: limits a member sets on themselves, on what they stake and how long they play in a
 // day, week or month, and breaks they take. A stricter limit holds at once and a looser one only
 // after a day, so a limit can't be lifted on a whim. A member who has set none is asked, on a day
-// they have played a lot, whether they want one. Nobody else sees any of it.
+// they have played a lot, whether they want one. Only the member and the admins see it, and an
+// admin can take it all away at once, as at a party everyone is at; the member is told.
 
 db.exec(`
   -- Every limit a member has set, and from when it holds: the newest that holds is the one that counts
@@ -32,6 +33,12 @@ db.exec(`
     seconds   REAL NOT NULL,
     last_beat TEXT NOT NULL,
     PRIMARY KEY (username, day)
+  );
+  -- When an admin took away a member's limits and break, and who
+  CREATE TABLE IF NOT EXISTS bet_limit_resets (
+    username TEXT NOT NULL,
+    by       TEXT NOT NULL,
+    at       TEXT NOT NULL
   );
   -- The days a member said not now to the question about a limit
   CREATE TABLE IF NOT EXISTS bet_nudges (
@@ -266,6 +273,49 @@ function nudgeOf(username: string, time: Date) {
 
 export const dismissNudge = (username: string) =>
   db.prepare('INSERT OR IGNORE INTO bet_nudges (username, day) VALUES (?, ?)').run(username, osloDate(new Date()))
+
+// --- An admin taking it away
+
+// Every limit and the break of a member, gone at once, also limits waiting to change. They aren't
+// asked about a limit again that day.
+export function resetLimits(username: string, by: string) {
+  const now = new Date().toISOString()
+  transaction(() => {
+    db.prepare('DELETE FROM bet_limits WHERE username = ? AND from_at > ?').run(username, now)
+    for (const kind of Object.keys(PERIODS) as LimitKind[]) {
+      for (const period of PERIODS[kind]) {
+        if (limitOf(username, kind, period, now).amount === null) continue
+        db.prepare('INSERT INTO bet_limits (username, kind, period, amount, from_at, created_at) VALUES (?, ?, ?, NULL, ?, ?)').run(
+          username,
+          kind,
+          period,
+          now,
+          now,
+        )
+      }
+    }
+    db.prepare('UPDATE bet_pauses SET until = ? WHERE username = ? AND until > ?').run(now, username, now)
+    db.prepare('INSERT INTO bet_limit_resets (username, by, at) VALUES (?, ?, ?)').run(username, by, now)
+    dismissNudge(username)
+  })
+}
+
+// The last time an admin took away the member's limits, in the last 30 days
+export function lastReset(username: string) {
+  const since = new Date(Date.now() - 30 * DAY_MS).toISOString()
+  return (
+    (db.prepare('SELECT by, at FROM bet_limit_resets WHERE username = ? AND at >= ? ORDER BY at DESC LIMIT 1').get(username, since) as
+      | { by: string; at: string }
+      | undefined) ?? null
+  )
+}
+
+// What an admin sees of a member: their limits, what is waiting, and their break; not what they have used
+export function limitsForAdmin(username: string) {
+  const now = new Date().toISOString()
+  const view = (kind: LimitKind) => Object.fromEntries(PERIODS[kind].map(period => [period, limitOf(username, kind, period, now)]))
+  return { stake: view('stake'), time: view('time'), pause: pauseUntil(username, now) }
+}
 
 // --- What the member sees
 

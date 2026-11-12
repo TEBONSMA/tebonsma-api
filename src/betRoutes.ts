@@ -66,17 +66,22 @@ import { config } from './config.ts'
 import {
   assertCanPlay,
   dismissNudge,
+  lastReset,
+  limitsForAdmin,
   limitsOf,
   MAX_LIMIT,
   PAUSES,
   PERIODS,
   recordPlay,
+  resetLimits,
   setLimits,
   startPause,
   type LimitChange,
   type LimitPeriod,
   type PauseLength,
 } from './limits.ts'
+import { getMembers, usernameOf } from './members.ts'
+import { pushTo } from './push.ts'
 import { MAX_OUTCOMES, MAX_QUESTION_LENGTH, readExcluded, readImport, readLine, readMarket, readSectionTitle, readTime } from './marketInput.ts'
 
 const MAX_SLIPS = 20
@@ -244,11 +249,17 @@ function readLimits(body: Record<string, unknown>) {
   }
   return changes
 }
-betRoutes.get('/bet/limits', c => c.json(limitsOf(viewerOf(c).username)))
+// The member's own Spillepause, and who took their limits away last, if an admin did lately
+async function ownLimits(username: string) {
+  const reset = lastReset(username)
+  const by = reset && (await getMembers([reset.by])).get(reset.by)
+  return { ...limitsOf(username), reset: reset && { by: by?.name ?? 'En administrator', at: reset.at } }
+}
+betRoutes.get('/bet/limits', async c => c.json(await ownLimits(viewerOf(c).username)))
 betRoutes.put('/bet/limits', async c => {
   const { username } = viewerOf(c)
   setLimits(username, readLimits(await readBody(c)))
-  return c.json(limitsOf(username))
+  return c.json(await ownLimits(username))
 })
 // A break: { length: 'rest-of-day' | '24h' | '7d' | '30d' }
 betRoutes.post('/bet/limits/pause', async c => {
@@ -256,12 +267,29 @@ betRoutes.post('/bet/limits/pause', async c => {
   const { length } = await readBody(c)
   if (typeof length !== 'string' || !Object.hasOwn(PAUSES, length)) throw bad('Velg hvor lang pausen skal være')
   startPause(username, length as PauseLength)
-  return c.json(limitsOf(username))
+  return c.json(await ownLimits(username))
 })
 // Not now, to the question about a limit: not asked again today
 betRoutes.post('/bet/limits/nudge', c => {
   dismissNudge(viewerOf(c).username)
   return c.json({ ok: true })
+})
+// For admins: a member's limits and break, and taking them all away at once, as at a party
+// everyone is at. The member gets a push about it.
+function limitedMember(c: Context) {
+  if (!viewerOf(c).admin) throw new HTTPException(403, { message: 'Bare administratorer kan se og fjerne andres grenser' })
+  const username = usernameOf(id(c))
+  if (!username) throw new HTTPException(404, { message: 'Medlemmet finnes ikke' })
+  return username
+}
+betRoutes.get('/bet/members/:id/limits', c => c.json(limitsForAdmin(limitedMember(c))))
+betRoutes.delete('/bet/members/:id/limits', async c => {
+  const username = limitedMember(c)
+  const admin = viewerOf(c).username
+  resetLimits(username, admin)
+  const name = (await getMembers([admin])).get(admin)?.name ?? 'En administrator'
+  pushTo('tebbet', [username], { title: 'Spillepause', body: `${name} har fjernet grensene og pausen din.`, url: '/spillepause', tag: 'spillepause' })
+  return c.json(limitsForAdmin(username))
 })
 // The app saying the member is using it, every 30 seconds, for the time limits
 betRoutes.post('/bet/play', c => c.json({ blocked: recordPlay(viewerOf(c).username) }))
