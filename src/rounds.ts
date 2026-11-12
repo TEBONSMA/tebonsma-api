@@ -4,6 +4,7 @@ import { addCasinoRow, balanceOf } from './bets.ts'
 import { drawCrash, MAX_CRASH, multiplierAt, timeAt } from './crash.ts'
 import { db, transaction } from './db.ts'
 import { takeGift } from './gifts.ts'
+import { assertCanPlay } from './limits.ts'
 import type { Viewer } from './feed.ts'
 import { MEMBERS } from './flaksGames.ts'
 import { usernameOf } from './members.ts'
@@ -97,6 +98,7 @@ const slotDetail = (result: SlotResult, members: string[]) => ({
 
 // gift: a spin on the house, at its own stake, with nothing taken from the member
 export function spinSlot(viewer: Viewer, stake: number, trial: boolean, gift = false) {
+  assertCanPlay(viewer.username, trial || gift ? 0 : stake)
   const result = playSlot(randomInt)
   const members = collectorsFor()
   if (trial) return { frames: result.frames, members, payout: payoutOf(stake, result.win), round: null }
@@ -197,6 +199,7 @@ export function launch(viewer: Viewer, stake: number, target: number | null, gif
     if (db.prepare("SELECT 1 FROM flaks_rounds WHERE username = ? AND game = 'fyllekjoring' AND status = 'playing'").get(viewer.username)) {
       throw new HTTPException(409, { message: 'Du er allerede ute og kjører' })
     }
+    assertCanPlay(viewer.username, gift ? 0 : stake)
     const played = gift ? takeGift(viewer.username, 'fyllekjoring') : stake
     if (!gift) {
       ensureCoins(viewer, played)

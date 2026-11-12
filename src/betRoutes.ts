@@ -63,6 +63,20 @@ import { bad, readBody, viewerOf } from './feedRoutes.ts'
 import { planClaude, spentThisMonth } from './bots/claude.ts'
 import { decideAll } from './bots/index.ts'
 import { config } from './config.ts'
+import {
+  assertCanPlay,
+  dismissNudge,
+  limitsOf,
+  MAX_LIMIT,
+  PAUSES,
+  PERIODS,
+  recordPlay,
+  setLimits,
+  startPause,
+  type LimitChange,
+  type LimitPeriod,
+  type PauseLength,
+} from './limits.ts'
 import { MAX_OUTCOMES, MAX_QUESTION_LENGTH, readExcluded, readImport, readLine, readMarket, readSectionTitle, readTime } from './marketInput.ts'
 
 const MAX_SLIPS = 20
@@ -211,6 +225,47 @@ const id = (c: Context) => c.req.param('id') ?? ''
 
 betRoutes.get('/bet/me', async c => c.json(await getAccount(viewerOf(c))))
 
+// Spillepause, the member's own: limits on stakes (coins) and time (minutes) by the day, week or
+// month, null for none, as { stake: { day, week, month }, time: { day, week } }, each one optional
+function readLimits(body: Record<string, unknown>) {
+  const changes: LimitChange[] = []
+  for (const kind of ['stake', 'time'] as const) {
+    const given = body[kind]
+    if (given === undefined) continue
+    if (!given || typeof given !== 'object' || Array.isArray(given)) throw bad('Ugyldige grenser')
+    for (const [period, amount] of Object.entries(given)) {
+      if (!PERIODS[kind].includes(period as LimitPeriod)) throw bad('Ugyldig periode')
+      const max = MAX_LIMIT[kind][period as LimitPeriod]!
+      if (amount !== null && !(Number.isInteger(amount) && amount >= 1 && amount <= max)) {
+        throw bad(kind === 'stake' ? `Grensen for innsats må være et helt tall fra 1 til ${max}` : `Grensen for spilletid må være fra 1 til ${max} minutter`)
+      }
+      changes.push([kind, period as LimitPeriod, amount as number | null])
+    }
+  }
+  return changes
+}
+betRoutes.get('/bet/limits', c => c.json(limitsOf(viewerOf(c).username)))
+betRoutes.put('/bet/limits', async c => {
+  const { username } = viewerOf(c)
+  setLimits(username, readLimits(await readBody(c)))
+  return c.json(limitsOf(username))
+})
+// A break: { length: 'rest-of-day' | '24h' | '7d' | '30d' }
+betRoutes.post('/bet/limits/pause', async c => {
+  const { username } = viewerOf(c)
+  const { length } = await readBody(c)
+  if (typeof length !== 'string' || !Object.hasOwn(PAUSES, length)) throw bad('Velg hvor lang pausen skal være')
+  startPause(username, length as PauseLength)
+  return c.json(limitsOf(username))
+})
+// Not now, to the question about a limit: not asked again today
+betRoutes.post('/bet/limits/nudge', c => {
+  dismissNudge(viewerOf(c).username)
+  return c.json({ ok: true })
+})
+// The app saying the member is using it, every 30 seconds, for the time limits
+betRoutes.post('/bet/play', c => c.json({ blocked: recordPlay(viewerOf(c).username) }))
+
 betRoutes.get('/bet/events', async c => c.json(await listEvents(viewerOf(c))))
 betRoutes.get('/bet/members', async c => c.json(await listMembers()))
 betRoutes.get('/bet/events/:id', async c => c.json(await getEvent(viewerOf(c), id(c))))
@@ -342,7 +397,10 @@ betRoutes.post('/bet/flaks/:game/buy', async c => {
   return c.json({ ticket, account: await getAccount(viewer) }, 201)
 })
 // A free ticket to try the game, with every field; no coins move
-betRoutes.post('/bet/flaks/:game/try', c => c.json(tryTicket(c.req.param('game') ?? '')))
+betRoutes.post('/bet/flaks/:game/try', c => {
+  assertCanPlay(viewerOf(c).username)
+  return c.json(tryTicket(c.req.param('game') ?? ''))
+})
 // { field } scratches one field, {} all that are left
 betRoutes.post('/bet/flaks/tickets/:id/scratch', async c => {
   const viewer = viewerOf(c)
@@ -370,7 +428,11 @@ betRoutes.post('/bet/casino/blackjack/:id/:action', async c => {
   return c.json({ hand: act(viewer, id(c), action as Action), account: await getAccount(viewer) })
 })
 // A free spin with the same bets; no coins move and nothing is kept
-betRoutes.post('/bet/casino/roulette/try', async c => c.json(tryRoulette(readRouletteBets(await readBody(c)))))
+betRoutes.post('/bet/casino/roulette/try', async c => {
+  const bets = readRouletteBets(await readBody(c))
+  assertCanPlay(viewerOf(c).username)
+  return c.json(tryRoulette(bets))
+})
 betRoutes.post('/bet/casino/roulette/spin', async c => {
   const viewer = viewerOf(c)
   const spin = spinRoulette(viewer, readRouletteBets(await readBody(c)))
@@ -398,7 +460,10 @@ betRoutes.post('/bet/casino/fyllekjoring/launch', async c => {
   return c.json({ flight, account: await getAccount(viewer) }, 201)
 })
 // A free round: the crash point comes along and the site flies it alone
-betRoutes.post('/bet/casino/fyllekjoring/try', c => c.json(tryFlight()))
+betRoutes.post('/bet/casino/fyllekjoring/try', c => {
+  assertCanPlay(viewerOf(c).username)
+  return c.json(tryFlight())
+})
 betRoutes.post('/bet/casino/fyllekjoring/:id/takeout', async c => {
   const viewer = viewerOf(c)
   return c.json({ flight: takeOut(viewer, id(c)), account: await getAccount(viewer) })
