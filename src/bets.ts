@@ -1759,9 +1759,12 @@ export function listLedger(viewer: Viewer) {
 
 // Everyone who has played, by what they are worth: coins in hand and coins in play
 export async function getLeaderboard() {
-  const usernames = (db.prepare('SELECT DISTINCT username FROM bet_ledger').all() as { username: string }[]).map(
-    row => row.username,
-  )
+  // Only those who are members now: an account that got in without being one, or someone who has
+  // left, isn't on it
+  const current = new Set(await listGroupMembers(config.memberGroup))
+  const usernames = (db.prepare('SELECT DISTINCT username FROM bet_ledger').all() as { username: string }[])
+    .map(row => row.username)
+    .filter(username => current.has(username))
   // Members who haven't been here for a while are owed their Mondays too
   for (const username of usernames) ensureAccount(username)
 
@@ -1781,6 +1784,7 @@ export async function getLeaderboard() {
   const members = await getMembers(usernames)
 
   const rows = balances
+    .filter(row => current.has(row.username))
     .map(row => {
       const stats = slips.find(s => s.username === row.username)
       const inPlay = stats?.in_play ?? 0

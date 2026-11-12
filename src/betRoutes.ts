@@ -94,6 +94,12 @@ const MAX_LAYOUT_ITEMS = 500
 export const betRoutes = new Hono<Env>()
 
 betRoutes.use('/bet/*', requireCaller, bodyLimit({ maxSize: 32 * 1024 }))
+// TebBet is for the members of TEBONSMA (MEMBER_GROUP). Other accounts that can log in, like a
+// board's or a service's, get no account and can't play.
+betRoutes.use('/bet/*', async (c, next) => {
+  if (!c.get('caller').groups.includes(config.memberGroup)) throw new HTTPException(403, { message: 'BetTeb er bare for medlemmer av TEBONSMA' })
+  await next()
+})
 
 // A group's picture: anyone may fetch it, like a profile picture, and the ?v= in its address
 // changes with it. Admins put it up as JPEG (the site makes it smaller first) or take it down.

@@ -530,7 +530,7 @@ the count before that. Afterwards the vedtekter repo fetches what was adopted an
 | `PORT` | `8080` | Port to listen on |
 | `DATA_DIR` | `./data` (`/app/data` in Docker) | Folder for the SQLite database |
 | `ADMIN_GROUP` | `lldap_admin` | Group whose members moderate the feed |
-| `MEMBER_GROUP` | `medlemmer` | Group of the members of TEBONSMA, for TebBet's list of members |
+| `MEMBER_GROUP` | `medlemmer` | Group of the members of TEBONSMA. Only they can use TebBet (`403` for other accounts that can log in), and only they are on its list of members and its leaderboard |
 | `BOTS` | on | `off` keeps TebBet's bot from running (it is off in `npm run dev:mock` unless started with `--bots`) |
 | `ANTHROPIC_API_KEY` | none | Key for the Claude API. Without it the bot makes no markets with Claude |
 | `CLAUDE_MODEL` | `claude-opus-5-5` | The model the bot asks |

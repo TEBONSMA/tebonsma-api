@@ -323,7 +323,7 @@ describe('organizers', () => {
     const names = (await call('GET', '/members', 'dev')).data.map((m: any) => m.name)
     assert.ok(names.includes('Kari Nordmann') && names.includes('Ola Nordmann'))
     assert.ok(!names.includes('Dev Bruker'), 'the caller is left out')
-    assert.ok(!names.includes('Admin Bruker'), 'accounts outside the member group are left out')
+    assert.ok(!names.includes('Tebonsma Hovedstyre'), 'accounts outside the member group are left out')
   })
 
   it('may edit an event they were given, but not who organizes it', async () => {
@@ -1709,5 +1709,17 @@ describe('Spillepause', () => {
     assert.equal((await call('DELETE', `/bet/members/${ola}/limits`, 'admin')).data.pause, null, 'the break is over')
     assert.equal((await spin('ola', 10)).status, 200)
     assert.equal((await call('DELETE', '/bet/members/finnes-ikke/limits', 'admin')).status, 404)
+  })
+})
+
+describe('TebBet for members only', () => {
+  it('keeps out accounts that can log in but are not in the member group', async () => {
+    const me = await call('GET', '/bet/me', 'styret')
+    assert.equal(me.status, 403)
+    assert.equal(me.data.error, 'BetTeb er bare for medlemmer av TEBONSMA')
+    assert.equal((await call('POST', '/bet/casino/sponsorjakten/spin', 'styret', { stake: 10 })).status, 403)
+    assert.equal((await call('GET', '/members/me', 'styret')).data.coins, null, 'no coins on its page on the main site either')
+    const board = (await call('GET', '/bet/leaderboard', 'dev')).data
+    assert.ok(!board.some((row: any) => row.member.name === 'Tebonsma Hovedstyre'))
   })
 })

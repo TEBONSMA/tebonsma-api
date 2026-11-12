@@ -4,6 +4,7 @@ import { requireCaller, type Env } from './auth.ts'
 import { ensureAccount, getLeaderboard } from './bets.ts'
 import { countPostsBy, listPostsBy } from './feed.ts'
 import { bad, viewerOf } from './feedRoutes.ts'
+import { config } from './config.ts'
 import { getMembers, usernameOf } from './members.ts'
 import { getRecords } from './scoreboard.ts'
 
@@ -24,8 +25,9 @@ async function resolve(c: Context<Env>, param: string) {
 
 memberRoutes.get('/members/:id', requireCaller, async c => {
   const { username, member, isYou } = await resolve(c, c.req.param('id'))
-  // A new member starts with their coins the first time anyone looks
-  if (isYou) ensureAccount(username)
+  // A new member starts with their coins the first time anyone looks; an account that isn't a
+  // member gets none
+  if (isYou && c.get('caller').groups.includes(config.memberGroup)) ensureAccount(username)
   const standing = (await getLeaderboard()).find(row => row.member.id === member.id)
 
   return c.json({

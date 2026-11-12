@@ -90,7 +90,20 @@ const users = new Map<string, MockUser>([
       firstName: 'Admin',
       lastName: 'Bruker',
       avatar: null,
-      groups: ['lldap_admin'],
+      groups: ['medlemmer', 'lldap_admin'],
+      createdAt: '2025-01-01T12:00:00Z',
+    },
+  ],
+  // An account that can log in but isn't a member, like the board's
+  [
+    'styret',
+    {
+      email: 'styret@tebonsma.test',
+      displayName: 'Tebonsma Hovedstyre',
+      firstName: 'Tebonsma',
+      lastName: 'Hovedstyre',
+      avatar: null,
+      groups: ['hovedstyre'],
       createdAt: '2025-01-01T12:00:00Z',
     },
   ],
